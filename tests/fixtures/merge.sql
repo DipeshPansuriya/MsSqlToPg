@@ -1,0 +1,4 @@
+MERGE INTO dbo.Target AS t
+USING dbo.Source AS s ON t.ID = s.ID
+WHEN MATCHED THEN UPDATE SET t.Name = s.Name
+WHEN NOT MATCHED THEN INSERT (ID, Name) VALUES (s.ID, s.Name);
