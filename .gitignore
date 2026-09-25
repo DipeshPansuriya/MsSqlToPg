@@ -13,3 +13,6 @@ venv/
 logs/
 *.log
 *.bak
+
+# codegraph index (local only, never committed)
+.codegraph/
