@@ -1,0 +1,101 @@
+name: Release
+
+# Builds the self-contained Windows executable and attaches it to the GitHub
+# release for the tag. PyInstaller cannot cross-compile, so this must run on
+# windows-latest -- a macOS or Linux runner produces a binary that will not
+# start on the target machines.
+#
+# Triggered by pushing a v* tag, or manually with an existing tag name (useful
+# to backfill an asset onto a release that was published before this workflow
+# existed).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach the executable to"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+
+      - name: Run the test suite
+        run: python -m pytest -q
+
+      - name: Build the windowed executable
+        # BOTH --collect-all flags are load-bearing: sqlglot loads its dialects
+        # through importlib and pglast ships a compiled libpg_query extension,
+        # so PyInstaller's static analysis misses both. Without them the exe
+        # builds and launches, then fails at conversion time or silently
+        # degrades validation to "NOT CHECKED".
+        run: >
+          python -m PyInstaller --onefile --windowed --name MsSqlToPg
+          --collect-all sqlglot --collect-all pglast --noconfirm app.py
+
+      - name: Build the console twin for smoke testing
+        run: >
+          python -m PyInstaller --onefile --console --name MsSqlToPgCheck
+          --collect-all sqlglot --collect-all pglast --noconfirm app.py
+
+      - name: Smoke-test the packaged binary
+        shell: pwsh
+        run: |
+          $checks = @(
+            @{ file = "tests/fixtures/merge.sql";              expect = "MERGE" },
+            @{ file = "tests/fixtures/for_xml_path.sql";       expect = "STRING_AGG" },
+            @{ file = "tests/fixtures/openjson.sql";           expect = "jsonb_array_elements_text" },
+            @{ file = "tests/fixtures/v214_smoke.sql";         expect = "|| @SearchString ||" },
+            @{ file = "tests/fixtures/v217_smoke.sql";         expect = "OVER() AS TotalRecords" },
+            @{ file = "tests/fixtures/merge.sql";              expect = "PostgreSQL syntax: VALID" }
+          )
+          foreach ($c in $checks) {
+            $out = & .\dist\MsSqlToPgCheck.exe $c.file 2>&1 | Out-String
+            if ($out -notmatch [regex]::Escape($c.expect)) {
+              Write-Error "SMOKE TEST FAILED: $($c.file) did not produce '$($c.expect)'"
+              exit 1
+            }
+            Write-Host "ok: $($c.file) -> $($c.expect)"
+          }
+
+      - name: Report the packaged version
+        run: |
+          .\dist\MsSqlToPgCheck.exe --version
+          Get-Item .\dist\MsSqlToPg.exe | Select-Object Name, Length
+
+      - name: Attach the executable to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: dist/MsSqlToPg.exe
+          fail_on_unmatched_files: true
+          # The release body is authored in the GitHub UI / API, not here --
+          # this job only supplies the binary asset.
+          append_body: false
