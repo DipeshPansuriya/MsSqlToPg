@@ -1,5 +1,7 @@
 # MS-SQL → PostgreSQL Converter
 
+*Created by Vasu Ritesh*
+
 [![GitHub release](https://img.shields.io/github/release/DipeshPansuriya/MsSqlToPg.svg?label=latest)](https://github.com/DipeshPansuriya/MsSqlToPg/releases/latest)
 [![GitHub tag](https://img.shields.io/github/tag/DipeshPansuriya/MsSqlToPg.svg)](https://github.com/DipeshPansuriya/MsSqlToPg/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -53,8 +55,8 @@ Finds MS-SQL string literals in `.cs` files and rewrites them as PostgreSQL,
 in place.
 
 ```bat
-MsSqlToPg.exe --scan "E:/Project/Login_Command" --dry-run   :: report only
-MsSqlToPg.exe --scan "E:/Project/Login_Command"             :: rewrite in place
+MsSqlToPg.exe --scan "E:/Project/MyApp" --dry-run   :: report only
+MsSqlToPg.exe --scan "E:/Project/MyApp"             :: rewrite in place
 ```
 
 Or the **Scan C# project** tab in the GUI.
@@ -62,9 +64,9 @@ Or the **Scan C# project** tab in the GUI.
 ## Audit what is left, and check converted code (v2.13.0)
 
 ```bat
-MsSqlToPg.exe --audit "D:/TFS/KLSPL.Community.Import.API"                :: report only
-MsSqlToPg.exe --check-pg "D:/TFS/KLSPL.Community.Import.API" --dry-run   :: report only
-MsSqlToPg.exe --check-pg "D:/TFS/KLSPL.Community.Import.API"             :: repair in place
+MsSqlToPg.exe --audit "D:/Projects/MyApp"                :: report only
+MsSqlToPg.exe --check-pg "D:/Projects/MyApp" --dry-run   :: report only
+MsSqlToPg.exe --check-pg "D:/Projects/MyApp"             :: repair in place
 ```
 
 Or the **Audit / Check converted PG** tab.
@@ -77,7 +79,7 @@ Or the **Audit / Check converted PG** tab.
   `tsql-audit.md` + `tsql-audit.csv`. Never changes a file.
 - **Check converted PG** reads already-converted SQL *as PostgreSQL* — never
   re-scan converted code with `--scan` — and repairs the defects found by hand
-  in Aug–Sep 2026 (PC01–PC08: `fnGetLocalTime(CAST(... AS TIMESTAMP))`,
+  in Aug–Sep 2026 (PC01–PC08: `fnToLocalTime(CAST(... AS TIMESTAMP))`,
   `NUMBER_TO_STR`, welded `ON`, booleans vs 0/1, fabricated names,
   `YEAR()/MONTH()/DAY()`, temp-table guards, `DDTHH` masks, `WITH ROLLUP`)
   and, since v2.14.0, PC09–PC11: the missing `;` between the statements of a
@@ -89,8 +91,8 @@ Or the **Audit / Check converted PG** tab.
 
 ## v2.14.0 — what changed for converted queries (2026-10-07)
 
-- **`[brackets]`** (A051 in Convert/Scan, PC10 in Check-PG): `[Master_Tax]`,
-  `[ER].[IsDeleted]` used to become `"Master_Tax"`, `"ER"."IsDeleted"` — valid
+- **`[brackets]`** (A051 in Convert/Scan, PC10 in Check-PG): `[Ref_Tax]`,
+  `[ER].[IsDeleted]` used to become `"Ref_Tax"`, `"ER"."IsDeleted"` — valid
   grammar, but PostgreSQL matches quoted names case-sensitively against a
   lower-case schema, so they failed at runtime. They now come out bare;
   reserved words become `"order"`, names with spaces keep their quotes.
@@ -105,13 +107,13 @@ Or the **Audit / Check converted PG** tab.
 
 ## v2.18.0 — parameters and control-flow batches (2026-11-05)
 
-Measured on the Community Stock module: develop T-SQL converted with this tool,
+Measured on a real module: T-SQL converted with this tool,
 then executed on PostgreSQL 17 with every parameter typed the way Npgsql binds
 the C# value. v2.17.0 ran 53 of 78 outputs; v2.18.0 runs 75.
 
 - **A061** — a Dapper parameter compared with a typed column is cast to that
-  type: `Owner_OrgId = CAST(NULLIF(TRIM(CAST('@OrgCode' AS TEXT)), '') AS BIGINT)`,
-  `Org_Code = CAST(@AgentOrgId AS TEXT)`. SQL Server converted whatever C# sent;
+  type: `Owner_CustomerId = CAST(NULLIF(TRIM(CAST('@CustomerCode' AS TEXT)), '') AS BIGINT)`,
+  `Customer_Code = CAST(@ResellerId AS TEXT)`. SQL Server converted whatever C# sent;
   PostgreSQL raises `integer = text`. Needs `column_types.txt`.
 - **Scan / Check-PG** now pick up literals that open with `IF (...)`,
   `if('@x' = ...)`, `BEGIN <statement> ... END`, or a `--` comment in front of
@@ -125,10 +127,27 @@ the C# value. v2.17.0 ran 53 of 78 outputs; v2.18.0 runs 75.
   `CAST(.. AS BIT)` proof) becomes FALSE/TRUE, like `0`/`1` and `'true'`/`'false'`
   already did. A string assigned in `SET` is left alone.
 
+## Project profile (`project_profile.json`)
+
+A few rules depend on names that belong to your application. Put them in
+`project_profile.json` next to `MsSqlToPg.exe` (or next to `app.py`), or point
+`MSSQLTOPG_PROFILE` at it. Start from
+[project_profile.example.json](project_profile.example.json). Every key is optional.
+
+| Key | Used by | Meaning |
+|---|---|---|
+| `literal_safe_parameters` | A052, A061, L030 | names your application replaces as text, even inside a `'...'` literal (without `@`) |
+| `prefix_replaced_parameters` | L031 | names replaced as raw text with no word boundary (with `@`) |
+| `boolean_columns` | A007, PC04 | boolean flag columns not named `Is...` |
+| `local_time_functions` | A025, A054, PC01, F007, M002 | your functions that take a timestamp and a time-zone name |
+
+Without the file those lists are empty. `app.py --version` and the log show which
+file is in use, or why a file was ignored. The file is git-ignored: keep it local.
+
 ## Boolean columns (`boolean_columns.txt`)
 
-Many flag columns follow no naming convention (`GATEINSTATUS`,
-`HasAirlineAccepted`), and `COALESCE(flag, 0)` / `flag = 1` against a BOOLEAN
+Many flag columns follow no naming convention (`ENTRYSTATUS`,
+`HasVendorAccepted`), and `COALESCE(flag, 0)` / `flag = 1` against a BOOLEAN
 column parses and then fails at runtime. Run `boolean_columns_query.sql`
 (read-only) against the PostgreSQL database and save its output as
 `boolean_columns.txt` next to the exe. The converter (A024) and the
@@ -156,9 +175,9 @@ definitions in the query, so they need no file. `MSSQLTOPG_COLUMN_TYPES` and
 
 ## Database placeholders (A010, v2.16.0)
 
-`[@MasterdbName].[dbo].[T]` / `@DBName.T` lose the placeholder by default: the
-target is ONE PostgreSQL database and the infra's text substitution would turn
-`"@MasterdbName".T` into a schema that does not exist. For a platform that maps
+`[@AppDbName].[dbo].[T]` / `@DBName.T` lose the placeholder by default: the
+target is ONE PostgreSQL database and the application's text substitution would turn
+`"@AppDbName".T` into a schema that does not exist. For a platform that maps
 each SQL Server database to a PostgreSQL schema, run with
 `--keep-db-placeholders` (or `MSSQLTOPG_DB_PLACEHOLDER=schema`).
 
@@ -292,7 +311,7 @@ clean and paste-ready.
 PostgreSQL syntax: VALID
 
 What this query does:
-  - Select 6 columns from "Rights_FieldLabels", joined with 1 other table(s)
+  - Select 6 columns from "Field_Labels", joined with 1 other table(s)
 
 What changed from T-SQL:
   - ISNULL() -> COALESCE()
@@ -303,8 +322,8 @@ Needs attention:
   ! L003: BIT in PostgreSQL is a bit-string type, not a boolean. (line 6)
 
 Query facts:
-  - Statements: 1   - Tables: Master_Localization, Rights_FieldLabels
-  - Joins: 1        - Parameters: @OrgProdId, @RoleId
+  - Statements: 1   - Tables: Ref_Label, Field_Labels
+  - Joins: 1        - Parameters: @TenantProductId, @RoleId
 ```
 
 ### Every claim is verified
@@ -344,16 +363,16 @@ plain Dapper parameter**.
 ## Database-name placeholders
 
 A third kind of `@Name`: a database name the **application substitutes into the
-query text** before executing (`FROM [@MasterdbName].[dbo].[Master_Airport]`).
+query text** before executing (`FROM [@AppDbName].[dbo].[Ref_Region]`).
 Dropping it would silently repoint the query at the current database, so A010
 keeps it as a **quoted schema qualifier**:
 
 ```sql
 -- in                                          -- out
-FROM [@MasterdbName].[dbo].[Master_Airport]    FROM "@MasterdbName".Master_Airport
+FROM [@AppDbName].[dbo].[Ref_Region]    FROM "@AppDbName".Ref_Region
 ```
 
-`"@MasterdbName"` is a legal quoted identifier, so grammar validation passes.
+`"@AppDbName"` is a legal quoted identifier, so grammar validation passes.
 The value your application substitutes must now be the PostgreSQL **schema**
 holding those tables (exact case — it lands inside double quotes), whether
 native or a `postgres_fdw` foreign schema. A placeholder combined with a real
@@ -430,11 +449,12 @@ core/models.py          ConversionResult, Warning, Severity
 core/orchestrator.py    convert + validate, threading
 core/linter.py          rules L001-L020
 core/pgfixes.py         v2.13.0 rules: text pre-pass, AST fixes A024-A050, lint L021-L029
+core/profile.py         project_profile.json loader (application-specific names)
 core/markers.py         the shared T-SQL marker set (R007, fragments, audit)
 core/schema_hints.py    boolean_columns.txt / column_types.txt loaders (A024, A054), A010 policy
 core/typefix.py         A054 implicit conversions; the batch-aware column type Resolver
 core/procedural.py      A058 IF / ELSE flattening, statement segmentation for A031
-core/totalrecords.py    A059/A060/L032 (PC15/PC16): TotalRecords statements vs ACS's filterString pager
+core/totalrecords.py    A059/A060/L032 (PC15/PC16): TotalRecords statements vs a filterString pager
 tools/schema_from_ddl.py  column_types.txt / boolean_columns.txt from a DDL script
 core/audit.py           --audit: remaining T-SQL inventory
 core/pgcheck.py         --check-pg: repair already-converted PostgreSQL (PC01-PC16)
@@ -459,21 +479,21 @@ Every auto-fix (A001-A061), lint rule (L001-L032), resolvability rule (R001-R008
 - **A007** — a quoted `'0'`/`'1'` compared with a boolean column (by schema list, `Is...` name or `CAST(.. AS BIT)` proof) now converts to `FALSE`/`TRUE` instead of `... = '0'`. A string assigned in `SET` is left alone.
 
 ### v2.18.0 — 2026-11-05
-- **A061** — a Dapper parameter compared with a typed column is cast to that type (`Owner_OrgId = CAST(... AS BIGINT)`).
+- **A061** — a Dapper parameter compared with a typed column is cast to that type (`Owner_CustomerId = CAST(... AS BIGINT)`).
 - Scan / Check-PG now pick up literals that open with `IF (...)`, `if('@x' = ...)`, `BEGIN ... END`, or a `--` comment in front of T-SQL.
 
 ### v2.14.0 — 2026-10-07
-- **[brackets]** (PC10): `[Master_Tax]` now comes out bare instead of `"Master_Tax"` (quoted names are case-sensitive in PostgreSQL).
+- **[brackets]** (PC10): `[Ref_Tax]` now comes out bare instead of `"Ref_Tax"` (quoted names are case-sensitive in PostgreSQL).
 - **`;` between statements** (PC09): Check-PG adds the missing terminator.
 - **`'%@search%'`** (PC11) becomes `'%' || @search || '%'`.
 - **PC12**: `SPLIT(x, ',')` rewritten to a `STRING_TO_TABLE` derived table.
 
 ### v2.13.0 — Audit / Check converted PG
 - **Audit** lists every SQL constant that still holds T-SQL.
-- **Check-PG** repairs already-converted PostgreSQL (PC01–PC08): `fnGetLocalTime`, `NUMBER_TO_STR`, welded `ON`, booleans vs 0/1, fabricated names, `YEAR()/MONTH()/DAY()`, temp-table guards, `DDTHH` masks, `WITH ROLLUP`.
+- **Check-PG** repairs already-converted PostgreSQL (PC01–PC08): `fnToLocalTime`, `NUMBER_TO_STR`, welded `ON`, booleans vs 0/1, fabricated names, `YEAR()/MONTH()/DAY()`, temp-table guards, `DDTHH` masks, `WITH ROLLUP`.
 
 ### Earlier
-- **v2.16.0** — column types (`column_types.txt`), database placeholders (`[@MasterdbName]`), IF/ELSE flattening (A058).
+- **v2.16.0** — column types (`column_types.txt`), database placeholders (`[@AppDbName]`), IF/ELSE flattening (A058).
 - **v2.17.0** — TotalRecords window count (A059).
 - **v2.0.0** — Initial release: query conversion, C# project scan, three-tier correction (auto-fix / lint / validate), Query Insights.
 
@@ -482,4 +502,6 @@ Full rule details live in [CONVERSION_RULES.md](CONVERSION_RULES.md).
 ## License
 
 [MIT](LICENSE) — Copyright (c) 2026 Dipesh Pansuriya.
+
+Created by Vasu Ritesh.
 

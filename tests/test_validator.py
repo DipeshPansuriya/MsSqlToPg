@@ -186,7 +186,7 @@ def test_dapper_in_list_validates():
     """`IN @Ids` is Dapper list-expansion, not SQL -- Dapper rewrites it to
     `IN (@Ids1, @Ids2, ...)` at execution. Masking `@Ids` to `$1` is not
     enough: `IN $1` is still rejected, because IN needs a parenthesised list.
-    138 occurrences across 26 ACS files were failing validation on this."""
+    138 occurrences across 26 files were failing validation on this."""
     assert validator.validate(
         "SELECT a FROM t WHERE Id IN @JobIds AND x = 1").valid
 
@@ -215,7 +215,7 @@ def test_in_list_param_survives_conversion_byte_for_byte():
     """Dapper must still see `IN @JobIds` -- masking is validation-only."""
     from core import orchestrator
     result = orchestrator.convert(
-        "SELECT MasterJobId FROM EXP_JOB_Master WITH(NOLOCK) "
-        "WHERE MasterJobId IN @JobIds AND IsDeleted = 0")
+        "SELECT ParentJobId FROM OUT_JOB_Header WITH(NOLOCK) "
+        "WHERE ParentJobId IN @JobIds AND IsDeleted = 0")
     assert "IN @JobIds" in result.sql
     assert result.validation and result.validation.valid

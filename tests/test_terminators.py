@@ -30,7 +30,7 @@ def test_unterminated_statements_get_semicolons():
 
 
 def test_create_insert_select_drop_batch_converts_end_to_end():
-    """The PayerNameData/GSTPayerNameData shape from DropdownQueryMap."""
+    """The PayerNameData/TaxPayerNameData shape from LookupQueryMap."""
     batch = (
         "CREATE TABLE #Temp (PayerName VARCHAR(MAX))\n"
         "INSERT INTO #Temp\n"
@@ -45,7 +45,7 @@ def test_create_insert_select_drop_batch_converts_end_to_end():
 
 
 def test_terminator_lands_on_code_not_on_a_trailing_comment():
-    """InvoiceNoList regression: the last line before UPDATE was a comment-only
+    """BillNoList regression: the last line before UPDATE was a comment-only
     `--OFFSET ...` line, and a `;` appended there vanishes into the comment."""
     batch = (
         "SELECT a FROM t\n"
@@ -64,7 +64,7 @@ def test_terminator_lands_on_code_not_on_a_trailing_comment():
 # --------------------------------------------------------------------------
 
 def test_insert_select_feed_is_not_split():
-    """DocNoList regression: `INSERT INTO #t` + newline + `SELECT` is ONE
+    """Document-list regression: `INSERT INTO #t` + newline + `SELECT` is ONE
     statement; a `;` between them makes the INSERT invalid."""
     _, n = infer("INSERT INTO #t\nSELECT a FROM src")
     assert n == 0

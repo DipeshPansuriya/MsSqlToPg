@@ -55,7 +55,7 @@ _LEADING_COMMENTS = re.compile(r"^(?:\s|;|--[^\n]*(?:\n|$)|/\*.*?\*/)*", re.DOTA
 # v2.18.0: batches that open with T-SQL control flow -- `IF (@x = 'Y') BEGIN ...`,
 # `if('@T' = 'GSA') select ...`, `IF '@orgType' = 'Agent'`, `BEGIN DECLARE @t TABLE ... END`.
 # They used to fail the shape test and land in find_sql_fragments, so the converter (which flattens
-# IF/ELSE since A058) never saw them: 7 of 14 such Stock constants convert cleanly once offered.
+# IF/ELSE since A058) never saw them: about half of such constants convert cleanly once offered.
 # The condition must read like SQL (a parameter, NOT/EXISTS, a call or a comparison) and the body
 # must hold a real statement, so "If (you) select a value from the list" is not SQL; a BEGIN
 # batch must also end with END.
@@ -103,8 +103,8 @@ def looks_like_sql(text: str) -> bool:
 # subquery, a CASE expression, a WHERE predicate, a column mapping -- that C#
 # splices into a larger query at runtime:
 #
-#     ColMap_Count_GHAName = "(SELECT TOP 1 OrgName FROM Organization WITH(NOLOCK) ...)"
-#     DateFilter_CTE_ShipmentDate = "Job.ShipmentDate >= @InputDateFrom AND ..."
+#     ColMap_Count_OwnerName = "(SELECT TOP 1 Name FROM Customer WITH(NOLOCK) ...)"
+#     DateFilter_CTE_OrderDate = "o.OrderDate >= @FromDate AND ..."
 #
 # These fail the whole-statement shape test, so they were neither converted NOR
 # reported -- the worst outcome, because the T-SQL inside them still reaches the

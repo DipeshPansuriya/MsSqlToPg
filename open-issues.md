@@ -4,33 +4,31 @@
 
 - **Case-insensitive search (decision needed).** SQL Server compared `LIKE` / `=` case-insensitively; the
   converter keeps `LIKE` (case-sensitive in PostgreSQL). L025 covers lookup columns only.
-- **NULL parameters are bound as TEXT** by the ACS infra (`PostgresTypedDynamicParameters`) when no DbType is
+- **NULL parameters are bound as TEXT** by some data-access layers when no DbType is
   given, so `int_col = @x` fails only when the value is null. Not visible from the SQL alone; needs the C#
   caller. Converted SQL should `CAST(@x AS INT)` such parameters. **v2.18.0:** A061 does that wherever the
   parameter is compared with a column of known type; assignments (`SET col = @x`, `VALUES (@x)`) are not cast yet.
-- **Left from the 2026-11-05 Stock run (v2.18.0):** UNION `''` vs an INT column (SQL Server read '' as 0);
+- **Left from the 2026-11-05 run (v2.18.0):** UNION `''` vs an INT column (SQL Server read '' as 0);
   `ISNULL(varchar, bigint)` takes the FIRST argument's type in SQL Server, `COALESCE` the highest -- after
   transpiling, the output cannot tell which the source used; a `SELECT *` CTAS temp table is not typed when an
   `UPDATE … FROM` joins it; `INSERT INTO #t SELECT t.*` of a BIT into an INT temp column. IF shapes A058 refuses:
   sequential IFs without ELSE, IF without BEGIN/END, nested IF, `SELECT … INTO #t` inside a branch.
-- **What v2.16.0 still cannot convert (2026-10-09, Master corpus):** 37 batches build dynamic SQL (EXEC /
+- **What v2.16.0 still cannot convert (2026-10-09, reference corpus):** 37 batches build dynamic SQL (EXEC /
   sp_executesql — needs the C# caller rewritten); 29 use FOR XML / FOR JSON / OPENJSON shapes (L019);
   IF batches that assign variables inside a branch or return a different number of result sets per branch
   (A058 refuses them); `DATEADD(unit, n, '@TimeParam')` on a TIME-valued text parameter (only the caller knows
-  it is a TIME). `column_types.txt` is built from the EF models — regenerate it from the QA database
+  it is a TIME). When `column_types.txt` is built from ORM models, regenerate it from a live database
   (`column_types_query.sql`) when one is reachable: columns the models do not map are invisible to A054.
 
-- ~~A007 DefaultBranch miss~~ **CLOSED 2026-08-12 (v2.2.0):** A007 now has a
-  known-boolean allowlist (`_KNOWN_BOOLEAN_COLUMNS`: DefaultBranch,
-  RightsSwitchRole, SwitchRole, MultiAuthentication, BundleAvailable,
-  IsPrimaryStakeholder), matches `Is2FA`-style names (digit after `Is`), and
+- ~~A007 non-`Is*` flag miss~~ **CLOSED 2026-08-12 (v2.2.0):** A007 has a
+  known-boolean allowlist (now the profile's `boolean_columns`), matches `Is2FA`-style names (digit after `Is`), and
   rewrites `'true'/'false'` string compares. Extend the allowlist as more
   non-`Is*` flag columns surface — it remains the one fix that depends on the
   target schema.
 
 - **Awaiting the first real `--scan` run.** The C# project scan shipped 2026-08-10
-  and is verified on distilled fixtures of Dipesh's `Login_Command` files, not yet
-  on the whole project. Start with `--dry-run`.
+  and is verified on small distilled fixtures, not yet
+  on a whole project. Start with `--dry-run`.
 
 ## Risks to watch
 
@@ -72,8 +70,8 @@
 
 ## Decided, no longer open
 
-- A010 placeholder policy → **drop** `[@MasterdbName].[dbo].` by default (one PostgreSQL database; the
-  quoted-schema output failed on 1,580 of 1,756 Master queries when executed). `--keep-db-placeholders` /
+- A010 placeholder policy → **drop** `[@AppDbName].[dbo].` by default (one PostgreSQL database; the
+  quoted-schema output failed on 1,580 of 1,756 reference queries when executed). `--keep-db-placeholders` /
   `MSSQLTOPG_DB_PLACEHOLDER=schema` keeps the old form for a schema-per-database target (2026-10-09)
 
 - Engine → sqlglot only; ChartDB removed (2026-07-31)

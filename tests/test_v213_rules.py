@@ -34,21 +34,21 @@ def assert_usable(result):
 
 
 # ---------------------------------------------------------------- A025
-def test_fngetlocaltime_cast_to_datetime_is_dropped():
-    r = conv("SELECT fnGetLocalTime(CAST(a.AcceptanceTime AS DATETIME), @TimeZone) AS t FROM a")
+def test_fntolocaltime_cast_to_datetime_is_dropped():
+    r = conv("SELECT fnToLocalTime(CAST(a.ReceivedTime AS DATETIME), @TimeZone) AS t FROM a")
     assert "A025" in codes(r)
-    assert "CAST(a.AcceptanceTime AS TIMESTAMP)" not in r.sql
-    assert "FNGETLOCALTIME(a.AcceptanceTime, @TimeZone)" in one_line(r.sql).upper().replace(
-        "A.ACCEPTANCETIME", "a.AcceptanceTime").replace("@TIMEZONE", "@TimeZone")
+    assert "CAST(a.ReceivedTime AS TIMESTAMP)" not in r.sql
+    assert "FNTOLOCALTIME(a.ReceivedTime, @TimeZone)" in one_line(r.sql).upper().replace(
+        "A.RECEIVEDTIME", "a.ReceivedTime").replace("@TIMEZONE", "@TimeZone")
 
 
-def test_fngetlocaltime_getutcdate_becomes_now_not_naive_utc():
-    r = conv("SELECT dbo.fnGetLocalTime(GETUTCDATE(), @TimeZone) AS t")
+def test_fntolocaltime_getutcdate_becomes_now_not_naive_utc():
+    r = conv("SELECT dbo.fnToLocalTime(GETUTCDATE(), @TimeZone) AS t")
     assert "AT TIME ZONE 'UTC'" not in r.sql
     assert "CURRENT_TIMESTAMP" in r.sql
 
 
-def test_getutcdate_outside_fngetlocaltime_is_unchanged():
+def test_getutcdate_outside_fntolocaltime_is_unchanged():
     r = conv("SELECT GETUTCDATE() AS t")
     assert "AT TIME ZONE 'UTC'" in r.sql
 
@@ -147,12 +147,12 @@ def test_openjson_with_clause_normalises_object_or_array():
 
 def test_openjson_path_and_bracketed_camelcase_key():
     r = conv("SELECT j.Id FROM a CROSS APPLY OPENJSON(a.Payload, '$.items') "
-             "WITH (Id INT '$.id', [mawbNumber] VARCHAR(20)) j")
+             "WITH (Id INT '$.id', [parentNumber] VARCHAR(20)) j")
     sql = one_line(r.sql)
     assert "#> '{items}'" in sql
     # the JSON key keeps its case; since v2.14.0 (A051) the bracketed column
-    # name itself is unbracketed like every other [name] -- AS mawbNumber
-    assert "'mawbNumber'" in sql and "AS mawbNumber" in sql
+    # name itself is unbracketed like every other [name] -- AS parentNumber
+    assert "'parentNumber'" in sql and "AS parentNumber" in sql
     assert "LATERAL" in sql
     assert_usable(r)
 
@@ -459,24 +459,24 @@ def test_with_rollup():
 # ---------------------------------------------------------------- A024
 def test_boolean_list_drives_coalesce_fix(tmp_path, monkeypatch):
     listing = tmp_path / "bools.txt"
-    listing.write_text("# comment\ngateinstatus\n", encoding="utf-8")
+    listing.write_text("# comment\nentrystatus\n", encoding="utf-8")
     monkeypatch.setenv(schema_hints.ENV_VAR, str(listing))
     schema_hints.reset()
     try:
-        r = conv("SELECT a FROM t WHERE COALESCE(EM.GATEINSTATUS, 0) = 1")
-        assert "COALESCE(EM.GATEINSTATUS, FALSE) = TRUE" in one_line(r.sql)
+        r = conv("SELECT a FROM t WHERE COALESCE(EM.ENTRYSTATUS, 0) = 1")
+        assert "COALESCE(EM.ENTRYSTATUS, FALSE) = TRUE" in one_line(r.sql)
     finally:
         schema_hints.reset()
 
 
 def test_schema_list_parser_tolerates_query_output():
-    names = schema_hints.parse("column_name\n| IsActive |\n\nGateInStatus  # note\n")
-    assert names == {"isactive", "gateinstatus"}
+    names = schema_hints.parse("column_name\n| IsActive |\n\nEntryStatus  # note\n")
+    assert names == {"isactive", "entrystatus"}
 
 
 # ---------------------------------------------------------------- lint
 def test_l021_boolean_parameter_compared_to_zero():
-    assert "L021" in codes(conv("SELECT a FROM t WHERE @IsExport = 0"))
+    assert "L021" in codes(conv("SELECT a FROM t WHERE @IsOutbound = 0"))
 
 
 def test_l022_empty_string_against_date_column():
@@ -492,7 +492,7 @@ def test_l023_reserved_alias():
 
 
 def test_l025_case_sensitive_lookup():
-    assert "L025" in codes(conv("SELECT a FROM t WHERE ScreenName = 'BookSlot'"))
+    assert "L025" in codes(conv("SELECT a FROM t WHERE ScreenName = 'NewOrder'"))
 
 
 def test_l026_plus_literal():
@@ -527,7 +527,7 @@ def test_r007_is_quiet_on_clean_output():
 
 def test_r007_exec_marker_ignores_executed_columns():
     # regression: `\bEXEC\s*\w` matched ExecutedFlag / ExecutedDate (30 false
-    # refusals across Export on the first real-repo dry run)
+    # refusals across one module on the first real-repo dry run)
     r = conv("SELECT MAX(CASE WHEN k = 'x' THEN f END) AS ExecutedFlag, ExecutedDate FROM t")
     assert "R007" not in codes(r)
     assert_usable(r)

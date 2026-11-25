@@ -1,1 +1,1 @@
-SELECT value FROM OPENJSON(@AwbGuidJson)
+SELECT value FROM OPENJSON(@OrderGuidJson)

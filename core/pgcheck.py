@@ -2,13 +2,13 @@
 
 The C# scan must never run over converted code: PostgreSQL re-parsed as T-SQL
 shifts results. But most of the defects fixed by hand in Aug-Sep 2026 sit in
-code that was converted BEFORE the converter learned about them -- e.g. the 26
-Export files calling fnGetLocalTime(CAST(col AS TIMESTAMP), ...). This mode
+code that was converted BEFORE the converter learned about them -- e.g. files
+calling a local-time function as fn(CAST(col AS TIMESTAMP), ...). This mode
 reads each SQL literal as PostgreSQL, never as T-SQL, and:
 
   REPAIRS (text-level, each one re-validated -- a repair that makes a VALID
   query INVALID is reverted):
-    PC01 fnGetLocalTime(CAST(x AS TIMESTAMP), ...) / (NOW() AT TIME ZONE 'UTC')
+    PC01 <local-time function>(CAST(x AS TIMESTAMP), ...) / (NOW() AT TIME ZONE 'UTC')
          -> keep the timestamptz overload (A025)
     PC02 NUMBER_TO_STR(x, '<.NET mask>') -> TO_CHAR(x, '<PG mask>') (A026)
     PC03 welded alias `XON X.col` -> `X ON X.col` (A029)
@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from core import autofix, csharp, interpolation, markers, pgfixes, resolvability, scan, totalrecords, validator
+from core import autofix, csharp, interpolation, markers, pgfixes, resolvability, scan, totalrecords, validator, profile
 from core.models import Severity, Warning
 
 FIXED = "FIXED"
@@ -97,7 +97,11 @@ _UTC_NOW_RE = re.compile(r"(?is)^\s*\(?\s*(NOW\s*\(\s*\)|CURRENT_TIMESTAMP)\s+AT
 _SAFE_INNER_RE = re.compile(r"(?is)^\s*([\w.\"]+|NOW\s*\(\s*\)|CURRENT_TIMESTAMP|COALESCE\s*\(.*\)|MAX\s*\(.*\)|MIN\s*\(.*\))\s*$")
 
 
-def repair_fngetlocaltime(sql: str) -> tuple[str, int]:
+def repair_local_time_calls(sql: str) -> tuple[str, int]:
+    names = profile.current().local_time_functions
+    if not names:
+        return sql, 0
+
     def build(m, args):
         if not args:
             return None
@@ -110,7 +114,8 @@ def repair_fngetlocaltime(sql: str) -> tuple[str, int]:
         if _UTC_NOW_RE.match(first):
             return f"{m.group(0)[:-1]}(NOW(){', ' if len(args) > 1 else ''}{', '.join(args[1:])})"
         return None
-    return _replace_calls(sql, r"\bfngetlocaltime\s*\(", build)
+    alternatives = "|".join(re.escape(n.lower()) for n in names)
+    return _replace_calls(sql, rf"\b(?:{alternatives})\s*\(", build)
 
 
 def repair_number_to_str(sql: str) -> tuple[str, int]:
@@ -139,7 +144,7 @@ def _is_bool(name: str) -> bool:
     (L028), never rewritten."""
     from core import schema_hints
     low = name.lower()
-    return low in schema_hints.boolean_columns() or low in autofix._KNOWN_BOOLEAN_COLUMNS
+    return low in schema_hints.boolean_columns() or low in profile.current().boolean_columns
 
 
 def boolean_suspects(sql: str) -> list[str]:
@@ -266,7 +271,7 @@ def repair_brackets(sql: str) -> tuple[str, int]:
 
 
 def repair_param_literals(sql: str) -> tuple[str, int]:
-    """PC11 -- '%@x%' is never bound by QueryParameterProcessor (A052)."""
+    """PC11 -- '%@x%' is never bound as a parameter (A052)."""
     return pgfixes.rewrite_param_literals(sql, "||")
 
 
@@ -276,13 +281,13 @@ def repair_split_calls(sql: str) -> tuple[str, int]:
 
 
 # PC13 (v2.16.0): an earlier conversion kept the runtime placeholder as a quoted
-# schema ("@MasterdbName".T, A010's pre-2.16 output). With the default "drop"
+# schema ("@AppDbName".T, A010's pre-2.16 output). With the default "drop"
 # policy -- one PostgreSQL database -- the prefix goes, like A010 now does.
 _QUOTED_PLACEHOLDER_RE = re.compile(r'"@[A-Za-z_]\w*"\s*\.\s*')
 
 
 def repair_placeholder_schemas(sql: str) -> tuple[str, int]:
-    """PC13 -- "@MasterdbName".T -> T when MSSQLTOPG_DB_PLACEHOLDER is drop (default)."""
+    """PC13 -- "@AppDbName".T -> T when MSSQLTOPG_DB_PLACEHOLDER is drop (default)."""
     from core import schema_hints
     if schema_hints.db_placeholder_policy() != "drop":
         return sql, 0
@@ -342,7 +347,7 @@ def repair_statement_separators(sql: str) -> tuple[str, int]:
     SQL Server accepts `SELECT ... SELECT ...` as one batch; PostgreSQL stops
     at the second SELECT (42601). Conversions that kept the batch text without
     re-parsing it (by hand, or text-level fixes) carried the gap over -- 24
-    such constants in the Master API alone. PostgreSQL's own parser points at
+    such constants in one API alone. PostgreSQL's own parser points at
     each boundary: the error is AT a statement keyword, and the `;` goes after
     the last code character before it (never into a trailing comment). Every
     other parse error is left alone, and the result is kept only if the
@@ -375,7 +380,7 @@ REPAIRS = [
     ("PC11", "'%@param%' literal bound as '%' || @param || '%'", repair_param_literals),
     ("PC12", "SPLIT(x, sep) -> STRING_TO_TABLE derived table", repair_split_calls),
     ("PC13", '"@Placeholder".T -> T (one PostgreSQL database)', repair_placeholder_schemas),
-    ("PC01", "fnGetLocalTime kept on its timestamptz overload", repair_fngetlocaltime),
+    ("PC01", "local-time function kept on its timestamptz overload", repair_local_time_calls),
     ("PC02", "NUMBER_TO_STR -> TO_CHAR", repair_number_to_str),
     ("PC03", "welded alias ON split", repair_welded),
     ("PC04", "boolean compared/defaulted with 0/1 -> TRUE/FALSE", repair_booleans),

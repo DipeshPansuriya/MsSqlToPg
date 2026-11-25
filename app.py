@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import applog, insights, orchestrator, scan    # noqa: E402
+from core import profile                                 # noqa: E402
 from core.version import banner                          # noqa: E402
 from core.models import ConversionResult, Severity       # noqa: E402
 
@@ -237,8 +238,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-recursive", action="store_true",
                         help="with --scan: do not descend into subfolders")
     parser.add_argument("--keep-db-placeholders", action="store_true",
-                        help="keep [@MasterdbName].[dbo].T as a quoted schema "
-                             "\"@MasterdbName\".T (pre-2.16 output) instead of "
+                        help="keep [@AppDbName].[dbo].T as a quoted schema "
+                             "\"@AppDbName\".T (pre-2.16 output) instead of "
                              "dropping it for a single PostgreSQL database")
     parser.add_argument("--version", action="store_true",
                         help="print version and log location, then exit")
@@ -251,9 +252,13 @@ def main() -> int:
         os.environ["MSSQLTOPG_DB_PLACEHOLDER"] = "schema"
     _safe_stdout()
     folder = applog.configure()
+    applog.log_message(profile.describe())
+    if profile.current().problem:
+        print(profile.describe(), file=sys.stderr)
 
     if args.version:
         print(banner())
+        print(profile.describe())
         if folder:
             print(f"Logs: {folder}")
         return 0

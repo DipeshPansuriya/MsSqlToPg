@@ -145,7 +145,7 @@ def _mask_dapper_parameters(sql: str) -> str:
 # `IN $1`, because IN requires a parenthesised list or a subquery.
 #
 # Left unmasked this failed every query using the idiom (138 occurrences across
-# 26 files in ACS), and a failed validation makes the whole conversion "needs
+# 26 files in one codebase), and a failed validation makes the whole conversion "needs
 # review", so the source stayed T-SQL. The emitted SQL is untouched: `IN @Ids`
 # must survive byte-for-byte for Dapper to expand it.
 _IN_LIST_RE = re.compile(r"\bIN\s+\$1[ \t]*", re.IGNORECASE)

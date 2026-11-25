@@ -1,7 +1,7 @@
 """A011 string concat, A012 STRING_SPLIT, and interpolated-string masking.
 
-Fixtures are distilled from real KLSPL queries (DropdownQueryMap.cs,
-BulkUpdateHelper.cs, WarehouseLoadingQueries.cs).
+Fixtures are modelled on real-world query shapes (a lookup query map,
+BatchHelper.cs, LoadingQueries.cs).
 """
 
 from core import interpolation, orchestrator
@@ -15,7 +15,7 @@ def convert(sql: str):
 
 def test_a011_like_param_pattern():
     result = convert(
-        "SELECT Code FROM Master_City "
+        "SELECT Code FROM Ref_City "
         "WHERE (@SearchedVal = '' OR CityCode LIKE '%' + @SearchedVal + '%')")
     assert "||" in result.sql
     assert "+" not in result.sql
@@ -24,13 +24,13 @@ def test_a011_like_param_pattern():
 
 def test_a011_column_literal_column():
     result = convert(
-        "SELECT SHCCode + ' - ' + SHCDescription AS Name FROM Master_SHC")
+        "SELECT TagCode + ' - ' + TagDescription AS Name FROM Ref_Tag")
     assert "|| ' - ' ||" in result.sql
     assert any(w.code == "A011" for w in result.warnings)
 
 
 def test_a011_refuses_numeric_addition():
-    result = convert("SELECT Qty + 1 FROM Stock_Item")
+    result = convert("SELECT Qty + 1 FROM Item_Detail")
     assert "||" not in result.sql
     assert not any(w.code == "A011" for w in result.warnings)
 
@@ -55,11 +55,11 @@ def test_a017_unwraps_national_literal():
 
 
 def test_a017_unblocks_a011_for_national_chain():
-    """The real DropdownQueryMap shape: sqlglot parses N'...' as exp.National,
+    """The real LookupQueryMap shape: sqlglot parses N'...' as exp.National,
     not exp.Literal, so A011 saw no string literal and refused the chain --
     leaving `text + text`, which PostgreSQL rejects."""
     result = convert(
-        "SELECT (C.IATATwoLetterCode + N' - ' + B.OrgName) AS Description FROM t")
+        "SELECT (C.TwoLetterCode + N' - ' + B.OrgName) AS Description FROM t")
     assert "||" in result.sql
     assert "+" not in result.sql
     assert "N'" not in result.sql
@@ -103,9 +103,9 @@ def test_a012_refuses_three_argument_form():
 # ------------------------------------------------------- interpolation masking
 
 def test_mask_and_restore_roundtrip():
-    sql = "SELECT * FROM {tableName} WHERE Id = @Id AND Org = '{orgCode}'"
+    sql = "SELECT * FROM {tableName} WHERE Id = @Id AND Org = '{CustomerCode}'"
     masked, holes = interpolation.mask_holes(sql)
-    assert holes == ["{tableName}", "{orgCode}"]
+    assert holes == ["{tableName}", "{CustomerCode}"]
     assert "{" not in masked
     assert interpolation.restore_holes(masked, holes) == sql
 
@@ -160,7 +160,7 @@ def test_a013_nolock_in_update_from_join_parses():
 
 
 # --------------------------------------------------------------------------
-# A011 extended text evidence (ConsigneeData regression)
+# A011 extended text evidence (RecipientData regression)
 # --------------------------------------------------------------------------
 
 def test_chain_inside_function_argument_is_its_own_chain():

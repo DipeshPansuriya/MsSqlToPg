@@ -15,38 +15,38 @@ from core import liquibase
 
 HEADER = "--liquibase formatted sql\n\n"
 
-ADD_COLUMN = HEADER + """--changeset import-team:2026-06-10-WHLocation-mssql dbms:mssql
---comment: Add WHLocation column to IMP_MAWB
+ADD_COLUMN = HEADER + """--changeset app-team:2026-06-10-BinLocation-mssql dbms:mssql
+--comment: Add BinLocation column to ParentOrder
 IF NOT EXISTS (
     SELECT 1 FROM sys.columns
-    WHERE Name = 'WHLocation' AND Object_ID = OBJECT_ID('IMP_MAWB')
+    WHERE Name = 'BinLocation' AND Object_ID = OBJECT_ID('ParentOrder')
 )
 BEGIN
-ALTER TABLE IMP_MAWB
-ADD WHLocation NVARCHAR(100) NULL;
+ALTER TABLE ParentOrder
+ADD BinLocation NVARCHAR(100) NULL;
 END
 
---rollback ALTER TABLE [IMP_MAWB] DROP COLUMN [WHLocation];
+--rollback ALTER TABLE [ParentOrder] DROP COLUMN [BinLocation];
 """
 
 ALREADY_TWINNED = ADD_COLUMN + """
---changeset import-team:2026-06-10-WHLocation-postgresql dbms:postgresql
-ALTER TABLE IMP_MAWB ADD COLUMN IF NOT EXISTS WHLocation VARCHAR(100) NULL;
+--changeset app-team:2026-06-10-BinLocation-postgresql dbms:postgresql
+ALTER TABLE ParentOrder ADD COLUMN IF NOT EXISTS BinLocation VARCHAR(100) NULL;
 """
 
-DUPLICATE_IDS = HEADER + """--changeset vapt-team:2026-04-28-SEC316 dbms:mssql
-ALTER TABLE ForgotPassword ADD ExpGuidHash NVARCHAR(64) NULL;
+DUPLICATE_IDS = HEADER + """--changeset db-team:2026-04-28-T100 dbms:mssql
+ALTER TABLE PasswordReset ADD TokenHash NVARCHAR(64) NULL;
 
---changeset vapt-team:2026-04-28-SEC316 dbms:postgresql
-ALTER TABLE ForgotPassword ADD COLUMN IF NOT EXISTS ExpGuidHash VARCHAR(64);
+--changeset db-team:2026-04-28-T100 dbms:postgresql
+ALTER TABLE PasswordReset ADD COLUMN IF NOT EXISTS TokenHash VARCHAR(64);
 """
 
-# The real Export defect: a dbms:postgresql changeset that is a verbatim copy
+# A real defect: a dbms:postgresql changeset that is a verbatim copy
 # of its MSSQL twin and dies on deploy.
-TSQL_IN_PG_CHANGESET = HEADER + """--changeset export-team:2026-03-12-aes-pg dbms:postgresql
-IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.EXP_JOB_MRNDetails') AND name = 'AESGuid')
+TSQL_IN_PG_CHANGESET = HEADER + """--changeset app-team:2026-03-12-guid-pg dbms:postgresql
+IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.JobDetails') AND name = 'RowGuid')
 BEGIN
-    ALTER TABLE dbo.EXP_JOB_MRNDetails ADD AESGuid UNIQUEIDENTIFIER NULL
+    ALTER TABLE dbo.JobDetails ADD RowGuid UNIQUEIDENTIFIER NULL
 END
 """
 
@@ -67,10 +67,10 @@ def test_parses_changeset_identity_and_attributes():
     changesets = liquibase.parse(ADD_COLUMN)
     assert len(changesets) == 1
     changeset = changesets[0]
-    assert changeset.author == "import-team"
-    assert changeset.id == "2026-06-10-WHLocation-mssql"
+    assert changeset.author == "app-team"
+    assert changeset.id == "2026-06-10-BinLocation-mssql"
     assert changeset.dbms == "mssql"
-    assert changeset.comment == "Add WHLocation column to IMP_MAWB"
+    assert changeset.comment == "Add BinLocation column to ParentOrder"
 
 
 def test_rollback_and_comment_are_not_part_of_the_body():
@@ -112,7 +112,7 @@ def test_build_output_is_excluded(tmp_path):
 
 def test_duplicate_identity_is_detected():
     changesets = liquibase.parse(DUPLICATE_IDS)
-    assert liquibase.duplicate_identities(changesets) == ["vapt-team:2026-04-28-SEC316"]
+    assert liquibase.duplicate_identities(changesets) == ["db-team:2026-04-28-T100"]
 
 
 def test_duplicate_identity_is_reported_as_a_finding():
@@ -121,18 +121,18 @@ def test_duplicate_identity_is_reported_as_a_finding():
 
 
 def test_changeset_header_without_an_author_is_reported():
-    """Real defect found in Seeding/Master: `--changeset <id> dbms:mssql` with
+    """Real defect found in one repository: `--changeset <id> dbms:mssql` with
     no `author:` prefix. Liquibase cannot parse the file at all."""
-    text = HEADER + "--changeset 2026-06-11-Lane-Priority-sql dbms:mssql\nSELECT 1;\n"
+    text = HEADER + "--changeset 2026-06-11-Add-Priority-sql dbms:mssql\nSELECT 1;\n"
     assert liquibase.malformed_headers(text)
     _out, findings, _added = liquibase.process_text(text)
     assert any(f.code == "LB008" for f in findings)
 
 
 def test_changeset_header_missing_the_colon_is_reported():
-    """Real defect found in Tariff: `Passenger-team2026-02-18-...` -- the
+    """Real defect found in one repository: `app-team2026-02-18-...` -- the
     author ran into the id because the colon was dropped."""
-    text = HEADER + "--changeset team2026-02-18-HsnCode-mssql dbms:mssql\nSELECT 1;\n"
+    text = HEADER + "--changeset team2026-02-18-TaxCode-mssql dbms:mssql\nSELECT 1;\n"
     assert any(code == "LB008" for _line, _h in liquibase.malformed_headers(text)
                for code in ["LB008"])
 
@@ -163,8 +163,8 @@ def test_column_guard_becomes_add_column_if_not_exists():
 
 def test_index_guard_becomes_create_index_if_not_exists_and_drops_go():
     sql = ("IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_A' "
-           "AND object_id = OBJECT_ID('IMP_Flight'))\nBEGIN\n"
-           "CREATE NONCLUSTERED INDEX IX_A ON IMP_Flight (IsDeleted, Created);\n"
+           "AND object_id = OBJECT_ID('OrderBatch'))\nBEGIN\n"
+           "CREATE NONCLUSTERED INDEX IX_A ON OrderBatch (IsDeleted, Created);\n"
            "END\nGO\n")
     body, _r, codes, reason = liquibase.convert_sql(sql)
     assert reason == ""
@@ -182,8 +182,8 @@ def test_unrecognised_guard_shape_is_refused_not_guessed():
 def test_boolean_comparison_in_a_partial_index_is_fixed():
     """The real Import 2026-04-16 defect: `WHERE IsDeleted = 0` against a
     BOOLEAN column raises `operator does not exist: boolean = integer`."""
-    sql = ("CREATE NONCLUSTERED INDEX IX_B ON IMP_HAWB (MAWBID) "
-           "INCLUDE (HAWBID) WHERE IsDeleted = 0;")
+    sql = ("CREATE NONCLUSTERED INDEX IX_B ON ChildOrder (ParentId) "
+           "INCLUDE (ChildId) WHERE IsDeleted = 0;")
     body, _r, _codes, reason = liquibase.convert_sql(sql)
     assert reason == ""
     assert "= FALSE" in body.upper()
@@ -217,7 +217,7 @@ def test_boolean_compared_to_integer_is_caught():
 
 
 def test_boolean_check_ignores_ordinary_integer_columns():
-    assert liquibase.residual_tsql("SELECT * FROM t WHERE OrgProdId = 0;") == []
+    assert liquibase.residual_tsql("SELECT * FROM t WHERE TenantProductId = 0;") == []
 
 
 def test_plpgsql_if_exists_inside_a_do_block_is_not_flagged():
@@ -332,16 +332,16 @@ def test_running_twice_is_a_no_op():
 
 @pytest.fixture
 def project(tmp_path):
-    folder = tmp_path / "Import_DB" / "Changelogs" / "sql"
+    folder = tmp_path / "App_DB" / "Changelogs" / "sql"
     folder.mkdir(parents=True)
     (folder / "add-column.sql").write_text(ADD_COLUMN, encoding="utf-8")
     return tmp_path
 
 
 def test_dry_run_writes_nothing(project):
-    before = (project / "Import_DB" / "Changelogs" / "sql" / "add-column.sql").read_text(encoding="utf-8")
+    before = (project / "App_DB" / "Changelogs" / "sql" / "add-column.sql").read_text(encoding="utf-8")
     report = liquibase.run(project, dry_run=True)
-    after = (project / "Import_DB" / "Changelogs" / "sql" / "add-column.sql").read_text(encoding="utf-8")
+    after = (project / "App_DB" / "Changelogs" / "sql" / "add-column.sql").read_text(encoding="utf-8")
     assert report.converted == 1
     assert before == after
     assert not list(project.rglob("*.bak"))
@@ -350,7 +350,7 @@ def test_dry_run_writes_nothing(project):
 def test_real_run_writes_a_backup_and_updates_the_file(project):
     report = liquibase.run(project, dry_run=False)
     assert report.converted == 1
-    path = project / "Import_DB" / "Changelogs" / "sql" / "add-column.sql"
+    path = project / "App_DB" / "Changelogs" / "sql" / "add-column.sql"
     assert (path.parent / "add-column.sql.bak").exists()
     assert len(liquibase.parse(path.read_text(encoding="utf-8"))) == 2
 
@@ -365,7 +365,7 @@ def test_crlf_line_endings_are_preserved(tmp_path):
 
 
 def test_a_broken_file_does_not_stop_the_run(project, monkeypatch):
-    folder = project / "Import_DB" / "Changelogs" / "sql"
+    folder = project / "App_DB" / "Changelogs" / "sql"
     (folder / "bad.sql").write_text(ADD_COLUMN, encoding="utf-8")
     original = liquibase.process_text
 
@@ -472,15 +472,15 @@ def test_report_renders_without_a_root():
 # Comment-only fragments
 # --------------------------------------------------------------------------
 
-BANNERED = HEADER + """--changeset import-team:2026-08-11-idx-mssql dbms:mssql
+BANNERED = HEADER + """--changeset app-team:2026-08-11-idx-mssql dbms:mssql
 ------------------------------------------------------------
--- IMP_Flight: soft-delete filters
+-- OrderBatch: soft-delete filters
 ------------------------------------------------------------
 IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes WHERE name = 'IX_A' AND object_id = OBJECT_ID('IMP_Flight')
+    SELECT 1 FROM sys.indexes WHERE name = 'IX_A' AND object_id = OBJECT_ID('OrderBatch')
 )
 BEGIN
-    CREATE NONCLUSTERED INDEX IX_A ON IMP_Flight (IsDeleted, Created);
+    CREATE NONCLUSTERED INDEX IX_A ON OrderBatch (IsDeleted, Created);
 END
 GO
 """

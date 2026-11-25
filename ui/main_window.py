@@ -741,7 +741,7 @@ class AuditTab(ttk.Frame):
     * Audit -- list every SQL constant still holding T-SQL, live or dead.
       Report only.
     * Check converted PG -- repair known defects in SQL that was converted
-      BEFORE the converter learned about them (fnGetLocalTime casts,
+      BEFORE the converter learned about them (local-time function casts,
       NUMBER_TO_STR, welded ON, temp-table guards...). Re-scanning converted
       code as T-SQL is unsafe; this reads it as PostgreSQL.
     """
@@ -896,8 +896,8 @@ class AuditTab(ttk.Frame):
         if not dry_run and not messagebox.askokcancel(
                 TITLE,
                 "This will REPAIR already-converted PostgreSQL in .cs files under:\n\n"
-                f"{root}\n\nOnly known, mechanical defects are fixed (fnGetLocalTime "
-                "casts, NUMBER_TO_STR, welded ON, temp-table guards, fabricated "
+                f"{root}\n\nOnly known, mechanical defects are fixed (local-time "
+                "function casts, NUMBER_TO_STR, welded ON, temp-table guards, fabricated "
                 "names, booleans listed in boolean_columns.txt). Every repair is "
                 "re-validated against the PostgreSQL grammar, a .bak copy is saved "
                 "beside every changed file, and T-SQL literals are never touched.\n\n"

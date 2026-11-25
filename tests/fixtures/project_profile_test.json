@@ -1,0 +1,6 @@
+{
+  "literal_safe_parameters": ["DBName", "AppDbName", "UserId", "ScreenId", "ScreenName", "RoleId", "Tenant_Admin_Id"],
+  "prefix_replaced_parameters": ["@DBName", "@AppDbName", "@UserId", "@ScreenId", "@ScreenName", "@RoleId", "@Tenant_Admin_Id"],
+  "boolean_columns": ["defaultsite", "allowswitchrole", "isprimarycontact"],
+  "local_time_functions": ["fnToLocalTime"]
+}

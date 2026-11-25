@@ -15,13 +15,13 @@ def test_leading_semicolon_cte_is_recognised_as_sql():
     to fail the is-this-SQL shape test, so the literal was never offered to the
     converter and never reported -- a silent miss."""
     src = '''class Q { public static readonly string A = @"
-        ;WITH SHCWithGroupCTE AS (
-            SELECT Code FROM Master_SHC
+        ;WITH TagWithGroupCTE AS (
+            SELECT Code FROM Ref_Tag
         )
-        SELECT Code FROM SHCWithGroupCTE"; }'''
+        SELECT Code FROM TagWithGroupCTE"; }'''
     found = _csharp_for_leading_semicolon.find_sql_literals(src)
     assert len(found) == 1, found
-    assert "SHCWithGroupCTE" in found[0].sql
+    assert "TagWithGroupCTE" in found[0].sql
 
 
 def test_leading_semicolon_alone_is_not_sql():
@@ -182,11 +182,11 @@ def test_reindent_matches_surrounding_style():
 # A fragment is a literal C# splices into a larger query: a scalar subquery, a
 # CASE expression, a column mapping. It fails the whole-statement shape test,
 # so before this it was neither converted NOR reported -- yet the T-SQL inside
-# it still reached the database. ExportJobQueries.cs had 6 of them.
+# it still reached the database. JobQueries.cs had 6 of them.
 
 def test_colmap_scalar_subquery_is_a_fragment():
     sql = ("(SELECT TOP 1 OrgName FROM Organization WITH(NOLOCK) "
-           "WHERE OrgId = Job2.GHAId AND ISNULL(IsDeleted,0) = 0)")
+           "WHERE OrgId = Job2.HandlerId AND ISNULL(IsDeleted,0) = 0)")
     assert csharp.looks_like_sql_fragment(sql)
     assert "WITH (NOLOCK)" in csharp.tsql_markers(sql)
     assert "TOP n" in csharp.tsql_markers(sql)
@@ -194,7 +194,7 @@ def test_colmap_scalar_subquery_is_a_fragment():
 
 def test_case_expression_fragment_is_detected():
     assert csharp.looks_like_sql_fragment(
-        "CASE WHEN ISNULL(Job.IsConsolJob,0)=1 THEN 'Consol' ELSE 'Direct' END")
+        "CASE WHEN ISNULL(Job.IsGroupJob,0)=1 THEN 'Consol' ELSE 'Direct' END")
 
 
 def test_bare_predicate_fragment_is_detected():
@@ -205,9 +205,9 @@ def test_bare_predicate_fragment_is_detected():
 def test_clean_ansi_fragment_is_not_reported():
     """Nothing to convert -- a finding here would be pure noise."""
     assert not csharp.looks_like_sql_fragment(
-        "Job.ShipmentDate >= @InputDateFrom AND Job.ShipmentDate < @InputDateTo")
+        "Job.ShippedDate >= @InputDateFrom AND Job.ShippedDate < @InputDateTo")
     assert not csharp.looks_like_sql_fragment(
-        "CONCAT(Job.Prefix, '-', Job.AWBNumberId)")
+        "CONCAT(Job.Prefix, '-', Job.ParentNumberId)")
 
 
 def test_full_statement_is_not_a_fragment():

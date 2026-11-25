@@ -104,12 +104,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Prove the v2.14.0 rules shipped (from the Master API conversion). Each one
+REM Prove the v2.14.0 rules shipped (from a real API conversion). Each one
 REM was grammar-VALID and broken at runtime, so no earlier check would notice
 REM a stale bundle: A051 [brackets] -> bare names (quoted ones are case-
 REM sensitive), A052 '%@x%' bound, and the A018 fix -- a trailing `--` comment
 REM used to swallow the inferred `;`, so this batch did not parse at all.
-dist\MsSqlToPgCheck.exe tests\fixtures\v214_smoke.sql | findstr /C:"MTP.TerminalZone AS TerminalZoneId" >nul
+dist\MsSqlToPgCheck.exe tests\fixtures\v214_smoke.sql | findstr /C:"P.SiteArea AS SiteAreaId" >nul
 if errorlevel 1 (
     echo SMOKE TEST FAILED - A051 bracket identifiers missing from the bundle.
     exit /b 1
@@ -125,7 +125,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Prove the v2.16.0 rules shipped (measured by executing the Master corpus on
+REM Prove the v2.16.0 rules shipped (measured by executing a real query corpus on
 REM PostgreSQL): A058 IF/ELSE -> guarded UNION ALL (sqlglot returned EMPTY output
 REM for the IF), A055 unqualified SET target, A010 placeholder dropped.
 dist\MsSqlToPgCheck.exe tests\fixtures\v216_smoke.sql | findstr /C:"UNION ALL" >nul
@@ -138,14 +138,14 @@ if errorlevel 1 (
     echo SMOKE TEST FAILED - A055 SET-target qualifier rule missing from the bundle.
     exit /b 1
 )
-dist\MsSqlToPgCheck.exe tests\fixtures\v216_smoke.sql | findstr /C:"FROM Master_Airline AS MC" >nul
+dist\MsSqlToPgCheck.exe tests\fixtures\v216_smoke.sql | findstr /C:"FROM Ref_Vendor AS MC" >nul
 if errorlevel 1 (
     echo SMOKE TEST FAILED - A010 still keeps the database placeholder.
     exit /b 1
 )
 
 REM Prove the v2.17.0 rule shipped: A059 turns the TotalRecords count subquery
-REM that ACS's filterString pager wrapped (500 on three EDINotification lists)
+REM that a filterString pager wrapped (500 on three list screens)
 REM into a window count.
 dist\MsSqlToPgCheck.exe tests\fixtures\v217_smoke.sql | findstr /L /C:"OVER() AS TotalRecords" >nul
 if errorlevel 1 (

@@ -33,9 +33,7 @@
   variables to sqlglot — verified)
 
 ## Real-world inputs used as regression fixtures
-- A 57 KB production dashboard query — source of L011–L014 and A001–A009
-- `GetUserConfigQueries.cs` / `GetUserConfigQuery.cs` from `Login_Command` —
-  source of the C# scan fixtures (`tests/fixtures/csharp/`)
+- A large dashboard query — source of L011–L014 and A001–A009
 
 ## Internal
 - Design doc — `_documents/2026-07-30-mssql-to-postgres-converter-design.md`

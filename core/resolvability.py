@@ -42,7 +42,7 @@ MISSING_FUNCTIONS: dict[str, str] = {
     "OPENJSON": "json_array_elements_text(...) / json_to_recordset(...)",
     "STRING_SPLIT": "STRING_TO_TABLE(x, ',')",
     # v2.14.0: what is left when a conversion only stripped `dbo.` from the
-    # T-SQL table function dbo.Split -- 18 Master constants (PC12 repairs it)
+    # T-SQL table function dbo.Split (PC12 repairs it)
     "SPLIT": "STRING_TO_TABLE(x, ',') -- see A022 / PC12",
     "ISNULL": "COALESCE(a, b)",
     "GETDATE": "NOW()",
@@ -160,7 +160,7 @@ _CONTROL_FLOW = [
     (re.compile(r"(?i)\bGOTO\s+\w+|\bWAITFOR\s+(DELAY|TIME)\b"), "GOTO / WAITFOR"),
 ]
 
-# MERGE runs on PostgreSQL 15+ (ACS is 17.2) -- a check, not a rewrite.
+# MERGE runs on PostgreSQL 15+ (measured on 17) -- a check, not a rewrite.
 _WARNING_ONLY = {"MERGE"}
 _MERGE_NOTE = ("MERGE runs on PostgreSQL 15+, so this is not a rewrite -- but "
                "check it: `WHEN NOT MATCHED BY SOURCE` needs 17, `OUTPUT $action` "

@@ -7,6 +7,7 @@ Bump MINOR for new rules or features, PATCH for fixes.
 """
 
 APP_NAME = "MS-SQL to PostgreSQL Converter"
+AUTHOR = "Vasu Ritesh"
 VERSION = "2.18.1"
 
 # Bumped whenever a linter rule is added/changed, so a log tells you which
@@ -25,4 +26,4 @@ def title() -> str:
 
 
 def banner() -> str:
-    return f"{APP_NAME} v{VERSION}  ({RULES})"
+    return f"{APP_NAME} v{VERSION}  ({RULES})  -- Created by {AUTHOR}"

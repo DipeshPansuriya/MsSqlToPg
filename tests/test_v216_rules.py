@@ -1,7 +1,7 @@
 """v2.16.0: A010 drop policy, A019 join form, A054 schema-typed implicit conversions,
-A035 time operands, L031 infra-key collisions, typed-literal marker, schema_from_ddl.
+A035 time operands, L031 name collisions, typed-literal marker, schema_from_ddl.
 
-Every A054 case comes from the 2026-10-09 evaluation of the Master develop corpus
+Every A054 case comes from the 2026-10-09 evaluation of the reference corpus
 (the converted query failed on PostgreSQL 17 while the hand conversion ran).
 """
 from __future__ import annotations
@@ -16,22 +16,22 @@ from tools import schema_from_ddl
 
 TYPES = """\
 # table.column<TAB>type
-system_listofvalue.listid\tinteger
-system_listofvalue.identifier\tcitext
-system_listofvalue.parentid\tinteger
-system_listofvalue.isactive\tboolean
-documentconfiguration.filesizeuom\tcitext
-documentconfiguration.maxfilesize\tcitext
-master_exchangerate.buyingrate\tnumeric(18,4)
-master_airport.airportid\tinteger
-master_airport.airportcode\tcitext
-client_listofvalue.terminalid\tcitext
-master_vessel.lastmodified\ttimestamp without time zone
-master_vessel.created\ttimestamp without time zone
-shipment_details.sbilldt\tcitext
-master_country.countryid\tinteger
-master_hscc.origincountry\tcitext
-master_uom.isactive\tboolean
+system_lookup.listid\tinteger
+system_lookup.identifier\tcitext
+system_lookup.parentid\tinteger
+system_lookup.isactive\tboolean
+fileconfiguration.filesizeuom\tcitext
+fileconfiguration.maxfilesize\tcitext
+ref_fxrate.costrate\tnumeric(18,4)
+ref_region.regionid\tinteger
+ref_region.regioncode\tcitext
+client_lookup.siteid\tcitext
+ref_machine.lastmodified\ttimestamp without time zone
+ref_machine.created\ttimestamp without time zone
+order_details.billdt\tcitext
+ref_country.countryid\tinteger
+ref_class.sourcecountry\tcitext
+ref_uom.isactive\tboolean
 """
 
 
@@ -63,23 +63,23 @@ def convert(sql: str):
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("src, expected", [
-    ("SELECT AirportCode FROM [@MasterdbName].[dbo].[Master_Airport] WITH(NOLOCK)", "FROM Master_Airport"),
-    ("SELECT * FROM @MasterdbName.dbo.Orders", "FROM Orders"),
+    ("SELECT RegionCode FROM [@AppDbName].[dbo].[Ref_Region] WITH(NOLOCK)", "FROM Ref_Region"),
+    ("SELECT * FROM @AppDbName.dbo.Orders", "FROM Orders"),
     ("SELECT * FROM [@DBName].[Orders]", "FROM Orders"),
-    ("SELECT * FROM [@MasterdbName].[reporting].[Sales]", "FROM reporting.Sales"),
+    ("SELECT * FROM [@AppDbName].[reporting].[Sales]", "FROM reporting.Sales"),
 ])
 def test_a010_drops_placeholder_by_default(src, expected):
     r = convert(src)
     assert expected in flat(r.sql)
-    assert "@MasterdbName" not in r.sql and "@DBName" not in r.sql
+    assert "@AppDbName" not in r.sql and "@DBName" not in r.sql
     assert "A010" in codes(r)
     assert "L015" not in codes(r)
 
 
 def test_a010_schema_mode_keeps_quoted_schema(monkeypatch):
     monkeypatch.setenv(schema_hints.PLACEHOLDER_ENV_VAR, "schema")
-    r = convert("SELECT a.x FROM [@MasterdbName].dbo.A a JOIN [@DBName].[dbo].[B] b ON a.id = b.id")
-    assert '"@MasterdbName".A' in r.sql and '"@DBName".B' in r.sql
+    r = convert("SELECT a.x FROM [@AppDbName].dbo.A a JOIN [@DBName].[dbo].[B] b ON a.id = b.id")
+    assert '"@AppDbName".A' in r.sql and '"@DBName".B' in r.sql
 
 
 def test_cli_flag_selects_schema_mode():
@@ -93,37 +93,37 @@ def test_cli_flag_selects_schema_mode():
 # --------------------------------------------------------------------------
 
 def test_a019_update_alias_with_inner_join_moves_on_to_where():
-    r = convert("UPDATE MA SET PortType = SLV.Description FROM #MasterPort MA INNER JOIN System_ListOfValue SLV "
-                "ON SLV.ListId = MA.PortTypeId WHERE MA.OrgProdId = @OrgProdID")
+    r = convert("UPDATE MA SET DepotType = SLV.Description FROM #RefDepot MA INNER JOIN System_Lookup SLV "
+                "ON SLV.ListId = MA.DepotTypeId WHERE MA.TenantProductId = @TenantProductId")
     out = flat(r.sql)
-    assert out.startswith("UPDATE MasterPort AS MA SET PortType = SLV.Description FROM System_ListOfValue AS SLV WHERE")
-    assert "SLV.ListId = MA.PortTypeId" in out and "MA.OrgProdId = @OrgProdID" in out
+    assert out.startswith("UPDATE RefDepot AS MA SET DepotType = SLV.Description FROM System_Lookup AS SLV WHERE")
+    assert "SLV.ListId = MA.DepotTypeId" in out and "MA.TenantProductId = @TenantProductId" in out
     assert "JOIN" not in out
     assert "A019" in codes(r)
 
 
 def test_a019_two_joins_become_a_comma_list():
-    r = convert("UPDATE MA SET CityCode = MC.CityCode FROM #MasterPort MA JOIN Master_City MC ON MC.CityId = MA.CityId "
-                "JOIN Master_State S ON S.StateId = MC.StateId")
+    r = convert("UPDATE MA SET CityCode = MC.CityCode FROM #RefDepot MA JOIN Ref_City MC ON MC.CityId = MA.CityId "
+                "JOIN Ref_State S ON S.StateId = MC.StateId")
     out = flat(r.sql)
-    assert "FROM Master_City AS MC, Master_State AS S WHERE MC.CityId = MA.CityId AND S.StateId = MC.StateId" in out
+    assert "FROM Ref_City AS MC, Ref_State AS S WHERE MC.CityId = MA.CityId AND S.StateId = MC.StateId" in out
 
 
 def test_a019_left_join_matches_the_target_row_on_ctid():
-    r = orchestrator.convert("UPDATE MA SET MA.x = 1 FROM #MasterPort MA LEFT JOIN Master_City MC ON MC.CityId = MA.CityId WHERE MA.Id > 0")
+    r = orchestrator.convert("UPDATE MA SET MA.x = 1 FROM #RefDepot MA LEFT JOIN Ref_City MC ON MC.CityId = MA.CityId WHERE MA.Id > 0")
     sql = flat(r.sql)
-    assert sql.startswith("UPDATE MasterPort AS MA_upd SET x = 1 FROM MasterPort AS MA LEFT JOIN Master_City AS MC")
+    assert sql.startswith("UPDATE RefDepot AS MA_upd SET x = 1 FROM RefDepot AS MA LEFT JOIN Ref_City AS MC")
     assert "WHERE MA_upd.ctid = MA.ctid AND ( MA.Id > 0 )" in sql
     assert "A019" in codes(r) and "L018" not in codes(r)
 
 
 def test_a019_unaliased_target_repeated_in_from():
-    r = orchestrator.convert("UPDATE #tempCity SET StateCode = S.StateCode FROM #tempCity INNER JOIN Master_State S ON S.StateId = #tempCity.StateId")
-    assert flat(r.sql) == "UPDATE tempCity SET StateCode = S.StateCode FROM Master_State AS S WHERE S.StateId = tempCity.StateId;"
+    r = orchestrator.convert("UPDATE #tempCity SET StateCode = S.StateCode FROM #tempCity INNER JOIN Ref_State S ON S.StateId = #tempCity.StateId")
+    assert flat(r.sql) == "UPDATE tempCity SET StateCode = S.StateCode FROM Ref_State AS S WHERE S.StateId = tempCity.StateId;"
 
 
 def test_a055_set_target_qualifier_dropped():
-    r = orchestrator.convert("UPDATE c SET c.StateCode = S.StateCode, c.StateName = S.StateName FROM #tempCity c INNER JOIN Master_State S ON S.StateId = c.StateId")
+    r = orchestrator.convert("UPDATE c SET c.StateCode = S.StateCode, c.StateName = S.StateName FROM #tempCity c INNER JOIN Ref_State S ON S.StateId = c.StateId")
     assert "SET StateCode = S.StateCode, StateName = S.StateName" in flat(r.sql)
     assert "A055" in codes(r)
 
@@ -150,36 +150,36 @@ def test_a051_string_alias_is_a_plain_name():
 # --------------------------------------------------------------------------
 
 def test_a054_integer_column_against_text_column(typed):
-    r = convert("SELECT FS.ListId FROM DocumentConfiguration DC LEFT JOIN System_ListOfValue FS ON FS.ListId = DC.FileSizeUOM")
+    r = convert("SELECT FS.ListId FROM FileConfiguration DC LEFT JOIN System_Lookup FS ON FS.ListId = DC.FileSizeUOM")
     assert "FS.ListId = CAST(NULLIF(TRIM(DC.FileSizeUOM), '') AS INTEGER)" in flat(r.sql)
     assert "A054" in codes(r)
 
 
 def test_a054_text_column_against_number_literal(typed):
-    r = convert("SELECT 1 FROM Client_ListOfValue CLOV WHERE CLOV.TerminalId = 0")
-    assert "CLOV.TerminalId = '0'" in flat(r.sql)
+    r = convert("SELECT 1 FROM Client_Lookup CLK WHERE CLK.SiteId = 0")
+    assert "CLK.SiteId = '0'" in flat(r.sql)
 
 
 def test_a054_number_in_split_list(typed):
-    r = convert("SELECT ListId FROM System_ListOfValue SL WHERE SL.ListId IN (SELECT value FROM STRING_SPLIT(@Ids, ','))")
+    r = convert("SELECT ListId FROM System_Lookup SL WHERE SL.ListId IN (SELECT value FROM STRING_SPLIT(@Ids, ','))")
     assert re.search(r"CAST\(NULLIF\(TRIM\(value\), ''\) AS INTEGER\)", r.sql), r.sql
 
 
 def test_a054_like_on_a_number(typed):
-    r = convert("SELECT 1 FROM Master_ExchangeRate E WHERE E.BuyingRate LIKE '%' + @s + '%'")
-    assert "CAST(E.BuyingRate AS TEXT) LIKE" in flat(r.sql)
+    r = convert("SELECT 1 FROM Ref_FxRate E WHERE E.CostRate LIKE '%' + @s + '%'")
+    assert "CAST(E.CostRate AS TEXT) LIKE" in flat(r.sql)
 
 
 def test_a054_coalesce_number_and_date_with_empty_string(typed):
     r = convert("SELECT COALESCE(SLV.ParentId, '') AS p, COALESCE(V.LastModified, '') AS d "
-                "FROM System_ListOfValue SLV, Master_Vessel V")
+                "FROM System_Lookup SLV, Ref_Machine V")
     out = flat(r.sql)
     assert "COALESCE(SLV.ParentId, 0)" in out
     assert "COALESCE(V.LastModified, '1900-01-01')" in out
 
 
 def test_a054_date_compared_with_empty_string(typed):
-    r = convert("SELECT CASE WHEN (VM.LastModified IS NULL OR VM.LastModified = '') THEN VM.Created END FROM Master_Vessel VM")
+    r = convert("SELECT CASE WHEN (VM.LastModified IS NULL OR VM.LastModified = '') THEN VM.Created END FROM Ref_Machine VM")
     assert "VM.LastModified = '1900-01-01'" in flat(r.sql)
 
 
@@ -189,36 +189,36 @@ def test_a054_case_number_and_empty_string_needs_no_schema():
 
 
 def test_a054_case_number_and_text_branch(typed):
-    r = convert("SELECT CASE WHEN @m = 'X' THEN 0 ELSE CAST(ParentId AS VARCHAR(10)) END FROM System_ListOfValue")
+    r = convert("SELECT CASE WHEN @m = 'X' THEN 0 ELSE CAST(ParentId AS VARCHAR(10)) END FROM System_Lookup")
     assert "THEN '0' ELSE" in flat(r.sql)
 
 
 def test_a054_case_boolean_branch_gets_true_false(typed):
-    r = convert("SELECT 1 FROM Master_UOM MUOM WHERE COALESCE(MUOM.IsActive, 0) = "
+    r = convert("SELECT 1 FROM Ref_UOM MUOM WHERE COALESCE(MUOM.IsActive, 0) = "
                 "CASE WHEN @IsAll = 1 THEN COALESCE(MUOM.IsActive, 0) ELSE 1 END")
     assert "ELSE TRUE END" in flat(r.sql)
 
 
 def test_a054_text_column_in_number_subquery(typed):
-    r = convert("SELECT 1 FROM Master_HSCC MH WHERE MH.OriginCountry IN (SELECT CountryId FROM Master_Country)")
-    assert "CAST(NULLIF(TRIM(MH.OriginCountry), '') AS INTEGER) IN" in flat(r.sql)
+    r = convert("SELECT 1 FROM Ref_Class MH WHERE MH.SourceCountry IN (SELECT CountryId FROM Ref_Country)")
+    assert "CAST(NULLIF(TRIM(MH.SourceCountry), '') AS INTEGER) IN" in flat(r.sql)
 
 
-def test_a054_text_into_fngetlocaltime_and_to_char(typed):
-    r = convert("SELECT FORMAT(dbo.fnGetLocalTime(SD.SBillDt, @TimeZone), 'dd/MM/yyyy') FROM Shipment_Details SD")
+def test_a054_text_into_fntolocaltime_and_to_char(typed):
+    r = convert("SELECT FORMAT(dbo.fnToLocalTime(SD.BillDt, @TimeZone), 'dd/MM/yyyy') FROM Order_Details SD")
     out = flat(r.sql)
-    assert "FNGETLOCALTIME(CAST(SD.SBillDt AS TIMESTAMPTZ), @TimeZone)" in out      # timestamptz overload (A025)
+    assert "FNTOLOCALTIME(CAST(SD.BillDt AS TIMESTAMPTZ), @TimeZone)" in out      # timestamptz overload (A025)
 
 
 def test_a054_without_column_types_changes_nothing_schema_dependent():
-    r = convert("SELECT FS.ListId FROM DocumentConfiguration DC LEFT JOIN System_ListOfValue FS ON FS.ListId = DC.FileSizeUOM")
+    r = convert("SELECT FS.ListId FROM FileConfiguration DC LEFT JOIN System_Lookup FS ON FS.ListId = DC.FileSizeUOM")
     assert "CAST(NULLIF" not in r.sql
     assert "A054" not in codes(r)
 
 
 def test_a054_unknown_table_is_left_alone(typed):
-    r = convert("SELECT 1 FROM Unknown_Table U WHERE U.TerminalId = 0")
-    assert "U.TerminalId = 0" in flat(r.sql)
+    r = convert("SELECT 1 FROM Unknown_Table U WHERE U.SiteId = 0")
+    assert "U.SiteId = 0" in flat(r.sql)
 
 
 def test_a054_never_breaks_unparseable_output():
@@ -249,7 +249,7 @@ def test_l031_parameter_starting_with_an_infra_static_key():
 
 
 def test_l031_exact_keys_are_fine():
-    r = orchestrator.convert("SELECT * FROM t WHERE c = @UserId AND d = @Community_Admin_OrgId")
+    r = orchestrator.convert("SELECT * FROM t WHERE c = @UserId AND d = @Tenant_Admin_Id")
     assert "L031" not in codes(r)
 
 
@@ -263,13 +263,13 @@ def test_typed_date_literal_is_not_string_concat():
 # --------------------------------------------------------------------------
 
 DDL = """
-CREATE TABLE master_airline (
-    airlineid integer GENERATED BY DEFAULT AS IDENTITY,
+CREATE TABLE ref_vendor (
+    vendorid integer GENERATED BY DEFAULT AS IDENTITY,
     code citext NOT NULL,
     isactive boolean NOT NULL DEFAULT TRUE,
     remarks boolean,
     rate numeric(10,2),
-    CONSTRAINT "PK_master_airline" PRIMARY KEY (airlineid)
+    CONSTRAINT "PK_ref_vendor" PRIMARY KEY (vendorid)
 );
 CREATE TABLE public.other (id int, remarks text, "Active" boolean);
 """
@@ -277,9 +277,9 @@ CREATE TABLE public.other (id int, remarks text, "Active" boolean);
 
 def test_schema_from_ddl_parses_tables_and_types():
     tables = schema_from_ddl.parse_ddl(DDL)
-    assert tables["master_airline"]["code"] == "citext"
-    assert tables["master_airline"]["rate"] == "numeric(10,2)"
-    assert "pk_master_airline" not in tables["master_airline"]
+    assert tables["ref_vendor"]["code"] == "citext"
+    assert tables["ref_vendor"]["rate"] == "numeric(10,2)"
+    assert "pk_ref_vendor" not in tables["ref_vendor"]
     assert tables["other"]["active"] == "boolean"
 
 
@@ -292,12 +292,12 @@ def test_schema_from_ddl_writes_both_files(tmp_path):
     ddl = tmp_path / "s.sql"
     ddl.write_text(DDL, encoding="utf-8")
     keep = tmp_path / "keep.txt"
-    keep.write_text("gateinstatus\nremarks\n", encoding="utf-8")
+    keep.write_text("entrystatus\nremarks\n", encoding="utf-8")
     assert schema_from_ddl.main([str(ddl), "--out", str(tmp_path), "--merge-boolean", str(keep)]) == 0
     assert schema_hints.parse((tmp_path / "boolean_columns.txt").read_text(encoding="utf-8")) == \
-        frozenset({"active", "isactive", "gateinstatus"})
+        frozenset({"active", "isactive", "entrystatus"})
     types = schema_hints.parse_types((tmp_path / "column_types.txt").read_text(encoding="utf-8"))
-    assert types["master_airline"]["rate"] == "numeric" and types["master_airline"]["code"] == "text"
+    assert types["ref_vendor"]["rate"] == "numeric" and types["ref_vendor"]["code"] == "text"
 
 
 def test_type_family():
@@ -314,22 +314,22 @@ def test_type_family():
 def test_pc13_drops_quoted_placeholder_schema():
     from core import pgcheck
     out, n = pgcheck.repair_placeholder_schemas(
-        """SELECT a FROM "@MasterdbName".Master_Tax AS T JOIN "@DBName".X ON 1 = 1 WHERE note = '"@DBName".keep'""")
+        """SELECT a FROM "@AppDbName".Ref_Tax AS T JOIN "@DBName".X ON 1 = 1 WHERE note = '"@DBName".keep'""")
     assert n == 2
-    assert out == """SELECT a FROM Master_Tax AS T JOIN X ON 1 = 1 WHERE note = '"@DBName".keep'"""
+    assert out == """SELECT a FROM Ref_Tax AS T JOIN X ON 1 = 1 WHERE note = '"@DBName".keep'"""
 
 
 def test_pc13_respects_schema_mode(monkeypatch):
     from core import pgcheck
     monkeypatch.setenv(schema_hints.PLACEHOLDER_ENV_VAR, "schema")
-    assert pgcheck.repair_placeholder_schemas('SELECT a FROM "@MasterdbName".T')[1] == 0
+    assert pgcheck.repair_placeholder_schemas('SELECT a FROM "@AppDbName".T')[1] == 0
 
 
 def test_pc14_applies_a054_to_converted_code(typed):
     from core import pgcheck
     out, n = pgcheck.repair_implicit_conversions(
-        "SELECT 1 FROM Client_ListOfValue AS CLOV WHERE CLOV.TerminalId = 0")
-    assert n == 1 and "CLOV.TerminalId = '0'" in out
+        "SELECT 1 FROM Client_Lookup AS CLK WHERE CLK.SiteId = 0")
+    assert n == 1 and "CLK.SiteId = '0'" in out
 
 
 # --------------------------------------------------------------------------
@@ -337,69 +337,69 @@ def test_pc14_applies_a054_to_converted_code(typed):
 # --------------------------------------------------------------------------
 
 def test_a007_integer_flag_from_a_temp_table_is_not_boolean():
-    r = convert("SELECT CASE WHEN COUNT(1) > 0 THEN 1 ELSE 0 END AS IsOceanConfig INTO #OceanFlag FROM T; "
-                "SELECT 1 FROM #OceanFlag f WHERE f.IsOceanConfig = 1")
-    assert "WHERE f.IsOceanConfig = 1" in flat(r.sql)
+    r = convert("SELECT CASE WHEN COUNT(1) > 0 THEN 1 ELSE 0 END AS IsRemoteConfig INTO #RemoteFlag FROM T; "
+                "SELECT 1 FROM #RemoteFlag f WHERE f.IsRemoteConfig = 1")
+    assert "WHERE f.IsRemoteConfig = 1" in flat(r.sql)
 
 
 def test_a007_varchar_flag_declared_in_temp_table_keeps_its_text():
-    r = convert("CREATE TABLE #templst (DocNo VARCHAR(50), IsRefundExpire VARCHAR(10)); "
-                "SELECT DocNo FROM #templst WHERE IsRefundExpire = 'false'")
-    assert "WHERE IsRefundExpire = 'false'" in flat(r.sql)
+    r = convert("CREATE TABLE #templst (DocNo VARCHAR(50), IsOfferExpire VARCHAR(10)); "
+                "SELECT DocNo FROM #templst WHERE IsOfferExpire = 'false'")
+    assert "WHERE IsOfferExpire = 'false'" in flat(r.sql)
 
 
 def test_a007_boolean_compared_with_a_bit_case():
-    r = convert("SELECT 1 FROM Master_Gate WHERE ISNULL(IsActive, 0) = (CASE WHEN @s = 'Active' THEN 1 ELSE 0 END)")
+    r = convert("SELECT 1 FROM Ref_Door WHERE ISNULL(IsActive, 0) = (CASE WHEN @s = 'Active' THEN 1 ELSE 0 END)")
     assert "COALESCE(IsActive, FALSE) = ( CASE WHEN @s = 'Active' THEN TRUE ELSE FALSE END )" in flat(r.sql)
 
 
 def test_a054_like_on_a_boolean_matches_bit_text(typed):
-    r = convert("SELECT * INTO #TempCT FROM (SELECT CT.UomId, CT.IsActive FROM Master_UOM CT) AS TC; "
+    r = convert("SELECT * INTO #TempCT FROM (SELECT CT.UomId, CT.IsActive FROM Ref_UOM CT) AS TC; "
                 "SELECT IsActive FROM #TempCT WHERE IsActive LIKE '%' + @s + '%' GROUP BY IsActive")
     assert "WHERE CASE IsActive WHEN TRUE THEN '1' WHEN FALSE THEN '0' END LIKE" in flat(r.sql)
 
 
 def test_a054_union_of_boolean_and_integer_is_integer():
-    r = convert("SELECT ISNULL(l.IsActive, 0) AS IsParent, l.x FROM Master_UOM l UNION SELECT 0 AS IsParent, 1")
+    r = convert("SELECT ISNULL(l.IsActive, 0) AS IsParent, l.x FROM Ref_UOM l UNION SELECT 0 AS IsParent, 1")
     assert "CAST(COALESCE(l.IsActive, FALSE) AS INTEGER) AS IsParent" in flat(r.sql)
 
 
 def test_a054_text_plus_text_is_concatenation():
-    r = convert("CREATE TABLE #FD (CarrierCode VARCHAR(3), FlightNumber VARCHAR(5)); "
-                "SELECT FD.CarrierCode + FD.FlightNumber AS Flight FROM #FD FD")
-    assert "FD.CarrierCode || FD.FlightNumber AS Flight" in flat(r.sql)
+    r = convert("CREATE TABLE #FD (ProviderCode VARCHAR(3), BatchNumber VARCHAR(5)); "
+                "SELECT FD.ProviderCode + FD.BatchNumber AS Batch FROM #FD FD")
+    assert "FD.ProviderCode || FD.BatchNumber AS Batch" in flat(r.sql)
 
 
 def test_a054_coalesce_text_with_number_default(typed):
-    r = convert("SELECT ISNULL(H.OriginCountry, 0) AS c FROM Master_HSCC H "
-                "LEFT JOIN Master_Country Cnt ON Cnt.CountryId = ISNULL(H.OriginCountry, 0)")
+    r = convert("SELECT ISNULL(H.SourceCountry, 0) AS c FROM Ref_Class H "
+                "LEFT JOIN Ref_Country Cnt ON Cnt.CountryId = ISNULL(H.SourceCountry, 0)")
     sql = flat(r.sql)
-    assert "COALESCE(H.OriginCountry, '0') AS c" in sql
-    assert "Cnt.CountryId = COALESCE(CAST(NULLIF(TRIM(H.OriginCountry), '') AS INTEGER), 0)" in sql
+    assert "COALESCE(H.SourceCountry, '0') AS c" in sql
+    assert "Cnt.CountryId = COALESCE(CAST(NULLIF(TRIM(H.SourceCountry), '') AS INTEGER), 0)" in sql
 
 
 def test_a054_convert_varchar_of_text_is_the_text():
-    r = convert("SELECT FORMAT(CT.ValidFrom, 'dd MMM yyyy') AS VALIDFrom INTO #T FROM Master_Vessel CT; "
+    r = convert("SELECT FORMAT(CT.ValidFrom, 'dd MMM yyyy') AS VALIDFrom INTO #T FROM Ref_Machine CT; "
                 "SELECT CONVERT(VARCHAR, VALIDFrom, 120) AS VALIDFrom FROM #T")
     assert "SELECT CAST(VALIDFrom AS VARCHAR) AS VALIDFrom FROM T" in flat(r.sql)
 
 
 def test_a054_param_literal_is_not_text():
-    r = convert("SELECT TOP (CASE WHEN ISNULL('@TopRecords', '') = '' THEN 10000 ELSE '@TopRecords' END) Code FROM Master_Tax")
+    r = convert("SELECT TOP (CASE WHEN ISNULL('@TopRecords', '') = '' THEN 10000 ELSE '@TopRecords' END) Code FROM Ref_Tax")
     assert "THEN 10000 ELSE '@TopRecords' END" in flat(r.sql)
 
 
 def test_a054_insert_select_converts_to_the_declared_column():
-    r = convert("CREATE TABLE #x (PermissibleSize INT); CREATE TABLE #d (MaxFileSize VARCHAR(10)); "
-                "INSERT INTO #x (PermissibleSize) SELECT DC.MaxFileSize FROM #d DC")
+    r = convert("CREATE TABLE #x (AllowedSize INT); CREATE TABLE #d (MaxFileSize VARCHAR(10)); "
+                "INSERT INTO #x (AllowedSize) SELECT DC.MaxFileSize FROM #d DC")
     assert "SELECT CAST(NULLIF(TRIM(DC.MaxFileSize), '') AS INTEGER) FROM d AS DC" in flat(r.sql)
 
 
 def test_a057_distinct_ordered_by_an_unselected_column():
     r = convert("SELECT DISTINCT CAST(SLV.ListId AS NVARCHAR(MAX)) AS Value, SLV.Description AS Name "
-                "FROM System_ListOfValue SLV ORDER BY SLV.ListId DESC")
+                "FROM System_Lookup SLV ORDER BY SLV.ListId DESC")
     sql = flat(r.sql)
-    assert "SELECT CAST(SLV.ListId AS TEXT) AS Value, SLV.Description AS Name FROM System_ListOfValue AS SLV "            "GROUP BY 1, 2 ORDER BY MAX(SLV.ListId) DESC" in sql
+    assert "SELECT CAST(SLV.ListId AS TEXT) AS Value, SLV.Description AS Name FROM System_Lookup AS SLV "            "GROUP BY 1, 2 ORDER BY MAX(SLV.ListId) DESC" in sql
     assert "A057" in codes(r)
 
 
@@ -414,8 +414,8 @@ def test_a012_cross_apply_split_keeps_the_value_column():
 
 
 def test_a051_string_alias_glued_to_the_next_word():
-    r = convert("Select AirportName as 'Name'from Master_Airport A")
-    assert flat(r.sql) == "SELECT AirportName AS Name FROM Master_Airport AS A;"
+    r = convert("Select RegionName as 'Name'from Ref_Region A")
+    assert flat(r.sql) == "SELECT RegionName AS Name FROM Ref_Region AS A;"
 
 
 # --------------------------------------------------------------------------
@@ -424,12 +424,12 @@ def test_a051_string_alias_glued_to_the_next_word():
 
 def test_a058_if_else_becomes_guarded_union_all():
     r = convert("Declare @SearchVal nvarchar(25) SET @SearchVal = '@SearchString' "
-                "if( @SearchVal = '') Begin select TOP 10 MC.Name, 1 AS IsActive from Master_Airline MC "
+                "if( @SearchVal = '') Begin select TOP 10 MC.Name, 1 AS IsActive from Ref_Vendor MC "
                 "WHERE ISNULL(MC.IsDeleted,0)=0 ORDER BY MC.Name END "
-                "ELSE BEGIN select MC.Name, NULL AS IsActive from Master_Airline MC WHERE MC.Name LIKE '%' + @SearchVal + '%' END")
+                "ELSE BEGIN select MC.Name, NULL AS IsActive from Ref_Vendor MC WHERE MC.Name LIKE '%' + @SearchVal + '%' END")
     sql = flat(r.sql)
     guard = "CASE WHEN ( ( CAST(( '@SearchString' ) AS VARCHAR(25)) = '' ) ) THEN 1 ELSE 0 END"
-    assert sql.startswith(f"( SELECT MC.Name, 1 AS IsActive FROM Master_Airline AS MC WHERE ( {guard} = 1 ) AND (")
+    assert sql.startswith(f"( SELECT MC.Name, 1 AS IsActive FROM Ref_Vendor AS MC WHERE ( {guard} = 1 ) AND (")
     # the bare NULL takes the other branch's type (A054)
     assert "ORDER BY MC.Name NULLS FIRST LIMIT 10 ) UNION ALL SELECT MC.Name, CAST(NULL AS INTEGER) AS IsActive" in sql
     assert f"WHERE ( {guard} = 0 ) AND ( MC.Name LIKE" in sql
@@ -437,7 +437,7 @@ def test_a058_if_else_becomes_guarded_union_all():
 
 
 def test_a058_star_from_a_temp_table_pairs_with_its_columns():
-    r = convert("SELECT Id, Name INTO #t FROM Master_Airline; IF @x = 1 BEGIN SELECT * FROM #t a END "
+    r = convert("SELECT Id, Name INTO #t FROM Ref_Vendor; IF @x = 1 BEGIN SELECT * FROM #t a END "
                 "ELSE BEGIN SELECT Id, Name FROM #t WHERE Id > 5 END; DROP TABLE #t")
     sql = flat(r.sql)
     assert "SELECT * FROM t AS a WHERE CASE WHEN ( @x = 1 ) THEN 1 ELSE 0 END = 1 UNION ALL " \
@@ -445,17 +445,17 @@ def test_a058_star_from_a_temp_table_pairs_with_its_columns():
 
 
 def test_a058_aggregate_without_group_by_is_wrapped():
-    r = convert("IF @Mode = 'A' BEGIN SELECT COUNT(*) AS n FROM Master_Airline END ELSE BEGIN SELECT COUNT(*) AS n FROM Master_Port END")
+    r = convert("IF @Mode = 'A' BEGIN SELECT COUNT(*) AS n FROM Ref_Vendor END ELSE BEGIN SELECT COUNT(*) AS n FROM Ref_Depot END")
     sql = flat(r.sql)
-    assert sql.startswith("SELECT * FROM ( SELECT COUNT(*) AS n FROM Master_Airline ) AS _if1 WHERE")
-    assert "UNION ALL SELECT * FROM ( SELECT COUNT(*) AS n FROM Master_Port ) AS _if2" in sql
+    assert sql.startswith("SELECT * FROM ( SELECT COUNT(*) AS n FROM Ref_Vendor ) AS _if1 WHERE")
+    assert "UNION ALL SELECT * FROM ( SELECT COUNT(*) AS n FROM Ref_Depot ) AS _if2" in sql
 
 
 def test_a058_guards_dml_in_a_branch():
-    r = convert("IF @x = 1 UPDATE Master_Port SET Name = 'a' WHERE Id = 3 ELSE DELETE FROM Master_Port WHERE Id = 4")
+    r = convert("IF @x = 1 UPDATE Ref_Depot SET Name = 'a' WHERE Id = 3 ELSE DELETE FROM Ref_Depot WHERE Id = 4")
     sql = flat(r.sql)
-    assert "UPDATE Master_Port SET Name = 'a' WHERE ( CASE WHEN ( @x = 1 ) THEN 1 ELSE 0 END = 1 ) AND ( Id = 3 );" in sql
-    assert "DELETE FROM Master_Port WHERE ( CASE WHEN ( @x = 1 ) THEN 1 ELSE 0 END = 0 ) AND ( Id = 4 );" in sql
+    assert "UPDATE Ref_Depot SET Name = 'a' WHERE ( CASE WHEN ( @x = 1 ) THEN 1 ELSE 0 END = 1 ) AND ( Id = 3 );" in sql
+    assert "DELETE FROM Ref_Depot WHERE ( CASE WHEN ( @x = 1 ) THEN 1 ELSE 0 END = 0 ) AND ( Id = 4 );" in sql
 
 
 def test_a058_refuses_a_conditional_assignment():
@@ -464,7 +464,7 @@ def test_a058_refuses_a_conditional_assignment():
 
 
 def test_a058_refuses_branches_with_different_columns():
-    r = orchestrator.convert("IF @x = 1 SELECT Id FROM Master_Port ELSE SELECT Name FROM Master_Port")
+    r = orchestrator.convert("IF @x = 1 SELECT Id FROM Ref_Depot ELSE SELECT Name FROM Ref_Depot")
     assert "A058" not in codes(r)
 
 
@@ -479,16 +479,16 @@ def test_a054_string_agg_of_a_number_is_text():
 
 def test_a031_default_overwritten_before_use():
     r = convert("DECLARE @VarSearch NVARCHAR(MAX) = '' DECLARE @VarTop INT = 0 SET @VarSearch = '@SearchValue' "
-                "SET @VarTop = '@TopRecords' SELECT TOP (@VarTop) Code FROM Master_Tax WHERE Code LIKE '%' + @VarSearch + '%'")
-    assert flat(r.sql) == ("SELECT Code FROM Master_Tax WHERE Code LIKE '%' || CAST(( '@SearchValue' ) AS TEXT) || '%' "
+                "SET @VarTop = '@TopRecords' SELECT TOP (@VarTop) Code FROM Ref_Tax WHERE Code LIKE '%' + @VarSearch + '%'")
+    assert flat(r.sql) == ("SELECT Code FROM Ref_Tax WHERE Code LIKE '%' || CAST(( '@SearchValue' ) AS TEXT) || '%' "
                            "LIMIT CAST(( '@TopRecords' ) AS INT);")
 
 
 def test_a031_select_assignment_keeps_its_from_on_the_next_line():
-    r = convert("DECLARE @TotalDock INT\nSELECT @TotalDock = COUNT(DockConfigDetailsId)\nFROM #tempDock\n"
-                "UPDATE TSM_SlotDuration SET TotalNoOfDock = @TotalDock WHERE Id = @Id")
-    assert flat(r.sql) == ("UPDATE TSM_SlotDuration SET TotalNoOfDock = CAST(( ( SELECT COUNT(DockConfigDetailsId) "
-                           "FROM tempDock LIMIT 1 ) ) AS INT) WHERE Id = @Id;")
+    r = convert("DECLARE @TotalBay INT\nSELECT @TotalBay = COUNT(BayConfigDetailsId)\nFROM #tempBay\n"
+                "UPDATE SCH_SlotDuration SET TotalNoOfBay = @TotalBay WHERE Id = @Id")
+    assert flat(r.sql) == ("UPDATE SCH_SlotDuration SET TotalNoOfBay = CAST(( ( SELECT COUNT(BayConfigDetailsId) "
+                           "FROM tempBay LIMIT 1 ) ) AS INT) WHERE Id = @Id;")
 
 
 def test_a031_select_assignment_refused_when_the_table_changes_later():
@@ -497,8 +497,8 @@ def test_a031_select_assignment_refused_when_the_table_changes_later():
 
 
 def test_a007_cast_as_bit_compared_with_an_integer():
-    r = convert("DECLARE @IsTSM BIT\nSELECT @IsTSM = D.FlagType\nFROM SystemConfigMaster_Details AS D\n"
-                "SELECT Id FROM Master_Airline WHERE ISNULL(@IsTSM, 0) = 1")
+    r = convert("DECLARE @IsScheduled BIT\nSELECT @IsScheduled = D.FlagType\nFROM SystemConfig_Details AS D\n"
+                "SELECT Id FROM Ref_Vendor WHERE ISNULL(@IsScheduled, 0) = 1")
     assert "AS BOOLEAN), FALSE ) = TRUE" in flat(r.sql)
 
 
@@ -510,7 +510,7 @@ def test_a054_number_against_an_inlined_text_variable():
 
 def test_a054_number_against_empty_string_is_zero():
     r = convert("DECLARE @Top INT = 0 SET @Top = '@TopRecords' "
-                "SELECT TOP (CASE WHEN ISNULL(@Top, 0) = '' THEN 10 ELSE @Top END) Code FROM Master_Tax")
+                "SELECT TOP (CASE WHEN ISNULL(@Top, 0) = '' THEN 10 ELSE @Top END) Code FROM Ref_Tax")
     assert "WHEN COALESCE(CAST(( '@TopRecords' ) AS INT), 0) = 0 THEN 10" in flat(r.sql)
 
 

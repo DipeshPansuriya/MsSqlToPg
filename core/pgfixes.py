@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import expressions as exp
 
-from core import autofix
+from core import autofix, profile
 from core.autofix import Applied
 from core.models import Severity, Warning
 
@@ -125,7 +125,7 @@ def _sql_string(value: str) -> str:
 # T-SQL brackets only DELIMIT a name; SQL Server still matches it
 # case-insensitively. sqlglot turns every bracket into a double-quoted
 # identifier, and in PostgreSQL a quoted identifier is case-SENSITIVE: the
-# schema was created with unquoted (lower-case) names, so "Master_Tax",
+# schema was created with unquoted (lower-case) names, so "Ref_Rate",
 # "IsDeleted" or an alias "ER" declared bare all fail at runtime -- relation /
 # column does not exist, missing FROM-clause entry -- while the grammar check
 # passes. A bare name folds to lower case and matches. Names PostgreSQL will
@@ -319,21 +319,15 @@ def rewrite_split_calls(sql: str) -> tuple[str, int]:
 # ==========================================================================
 # '%@Param%' -- a parameter written INSIDE a string literal (A052 / PC11 / L030)
 # ==========================================================================
-# ACS's QueryParameterProcessor binds a quoted parameter only when the literal
-# is EXACTLY '@Name' (regex '@(\w+)' between quotes). '%@searchText%' is never
-# bound: the filter compares against the text '@searchText' and matches
-# nothing -- no error on either database. The LIKE-wildcard forms have one
-# obvious meaning and are rewritten to a bound concatenation; anything else
-# mixing text and a parameter is reported (L030). Names the processor
-# replaces as plain TEXT before binding (@UserId, the @...dbName family) do
-# work inside a literal and are left alone, as are e-mail-like texts.
+# A parameter pre-processor commonly binds a quoted parameter only when the
+# literal is EXACTLY '@Name'. '%@searchText%' is then never bound: the filter
+# compares against the text '@searchText' and matches nothing -- no error on
+# either database. The LIKE-wildcard forms have one obvious meaning and are
+# rewritten to a bound concatenation; anything else mixing text and a parameter
+# is reported (L030). Names the application replaces as plain TEXT before
+# binding do work inside a literal and are left alone (the profile's
+# literal_safe_parameters), as are e-mail-like texts.
 
-_STATIC_TEXT_PARAMS = frozenset(n.lower() for n in (
-    "DBName", "LogdbName", "HangdbName", "TSMdbName", "LCCTdbName", "EDIdbName", "PCSdbName",
-    "WFdbName", "EXPdbName", "IMPdbName", "TarifdbName", "PassengerdbName", "MasterdbName",
-    "PGdbName", "RIdbName", "PCS1dbName", "PCS1MobiledbName", "CommonMobiledbName",
-    "HospitalitydbName", "contentmgtdbName", "UserId", "ScreenId", "ScreenName", "RoleId",
-    "Community_Admin_OrgId"))
 _WILDCARD_PARAM_RE = re.compile(r"^(%?)@([A-Za-z_][A-Za-z0-9_]*)(%?)$")
 _PARAM_IN_TEXT_RE = re.compile(r"(?<![\w@])@([A-Za-z_][A-Za-z0-9_]*)(?![\w.])")
 _EXACT_PARAM_RE = re.compile(r"^@[A-Za-z_][A-Za-z0-9_]*$")
@@ -366,7 +360,7 @@ def rewrite_param_literals(sql: str, concat: str) -> tuple[str, int]:
     edits = []
     for start, end, content in _string_literals(sql, masked):
         m = _WILDCARD_PARAM_RE.match(content)
-        if not m or not (m.group(1) or m.group(3)) or m.group(2).lower() in _STATIC_TEXT_PARAMS:
+        if not m or not (m.group(1) or m.group(3)) or m.group(2).lower() in profile.current().literal_safe_parameters:
             continue
         parts = (["'%'"] if m.group(1) else []) + ["@" + m.group(2)] + (["'%'"] if m.group(3) else [])
         edits.append((start, end, f" {concat} ".join(parts)))
@@ -382,7 +376,7 @@ def unbound_param_texts(sql: str) -> list[str]:
         if _EXACT_PARAM_RE.match(content) or _WILDCARD_PARAM_RE.match(content):
             continue
         names = [n for n in _PARAM_IN_TEXT_RE.findall(content)
-                 if n.lower() not in _STATIC_TEXT_PARAMS]
+                 if n.lower() not in profile.current().literal_safe_parameters]
         if names:
             found.append("'" + content[:40] + "'")
     return found
@@ -1014,7 +1008,7 @@ def fix_format_calls(sql: str, ctx: Context) -> str:
         lit = re.fullmatch(r"(?s)N?'((?:[^']|'')*)'", mask_arg)
         fid = ctx.next_id()
         if lit and re.fullmatch(r"@\w+", lit.group(1)):
-            # '@TimeFormat' -- a placeholder QueryParameterProcessor substitutes
+            # '@TimeFormat' -- a placeholder the application substitutes
             # into the text at runtime: the mask is dynamic, like a parameter.
             param += 1
             ctx.functions[fid] = ("TO_CHAR", "")
@@ -1249,7 +1243,7 @@ def fix_bracket_identifiers(sql: str, ctx: Context) -> str:
     ctx.note("A051", count,
              f"{count} [bracket] identifier(s) unbracketed. sqlglot would emit them as "
              f"double-quoted names, which PostgreSQL matches case-SENSITIVELY "
-             f"(\"Master_Tax\", \"IsDeleted\", an alias \"ER\" declared bare) -- valid "
+             f"(\"Ref_Rate\", \"IsDeleted\", an alias \"ER\" declared bare) -- valid "
              f"grammar, 'does not exist' at runtime. Reserved words are quoted in lower "
              f"case (\"order\"), names with spaces keep their quoted text. Output column "
              f"names now fold to lower case like any bare alias: quote an alias by hand "
@@ -1263,7 +1257,7 @@ def fix_param_literals(sql: str, ctx: Context) -> str:
     sql, count = rewrite_param_literals(sql, "+")
     ctx.note("A052", count,
              f"{count} '%@Param%' LIKE pattern(s) rewritten to '%' || @Param || '%'. "
-             f"QueryParameterProcessor binds only an EXACT '@Param' literal, so the "
+             f"Only an EXACT '@Param' literal is bound as a parameter, so the "
              f"pattern compared against the text '@Param' and matched nothing.")
     return sql
 
@@ -1377,21 +1371,22 @@ _NAIVE_TYPES = {getattr(exp.DataType.Type, n) for n in
                 if hasattr(exp.DataType.Type, n)}
 
 
-def fix_fngetlocaltime(expressions: list, original: str) -> Applied | None:
-    """A025: keep fnGetLocalTime on its timestamptz overload.
+def fix_local_time_calls(expressions: list, original: str) -> Applied | None:
+    """A025: keep a local-time function (profile: local_time_functions) on its
+    timestamptz overload.
 
-    Only the timestamptz overload maps Windows zone ids ('India Standard
-    Time') to IANA. `fnGetLocalTime(CAST(col AS DATETIME), @TimeZone)` becomes
+    Where only the timestamptz overload maps Windows zone ids ('India Standard
+    Time') to IANA, `fn(CAST(col AS DATETIME), @TimeZone)` becomes
     `CAST(col AS TIMESTAMP)`, which binds the timestamp overload and raises
-    'time zone "India Standard Time" not recognized' for every user with a
-    zone -- 26 Export files shipped that way. The first argument is a
-    timestamptz column (6,913 of them) or a clock function, so the cast is
-    dropped, and GETUTCDATE()/SYSUTCDATETIME() become NOW() instead of the
-    naive `NOW() AT TIME ZONE 'UTC'`."""
+    'time zone "India Standard Time" not recognized'. The first argument is
+    normally a timestamptz column or a clock function, so the cast is dropped,
+    and GETUTCDATE()/SYSUTCDATETIME() become NOW() instead of the naive
+    `NOW() AT TIME ZONE 'UTC'`."""
     count = 0
+    seen: list[str] = []
     for tree in expressions:
         for call in list(tree.find_all(exp.Anonymous)):
-            if str(call.name).lower() != "fngetlocaltime" or not call.expressions:
+            if not profile.is_local_time_function(str(call.name)) or not call.expressions:
                 continue
             first = call.expressions[0]
             new = None
@@ -1405,10 +1400,11 @@ def fix_fngetlocaltime(expressions: list, original: str) -> Applied | None:
             if new is not None:
                 first.replace(new)
                 count += 1
+                seen.append(str(call.name))
     if not count:
         return None
     return Applied("A025", count,
-                   f"{count} fnGetLocalTime first argument(s) kept as timestamptz "
+                   f"{count} {', '.join(sorted(set(seen)))} first argument(s) kept as timestamptz "
                    f"(CAST(... AS DATETIME) dropped / GETUTCDATE() -> NOW()). Only "
                    f"the timestamptz overload accepts Windows zone ids; the "
                    f"timestamp overload raises 'time zone ... not recognized'.")
@@ -2013,7 +2009,7 @@ def fix_scalar_subquery_order(expressions: list, original: str) -> list[Warning]
 
 def apply_ast_pre(expressions: list, original: str) -> list[Applied]:
     out = []
-    for fix in (fix_fngetlocaltime,):
+    for fix in (fix_local_time_calls,):
         r = fix([t for t in expressions if t is not None], original)
         if r:
             out.append(r)
@@ -2156,25 +2152,20 @@ _PLUS_LITERAL_RE = re.compile(r"'\+'")
 _TOCHAR_MASK_RE = re.compile(r"(?i)\bTO_(?:CHAR|DATE|TIMESTAMP)\s*\((?:[^()']|'(?:[^']|'')*'|\([^()]*\))*?,\s*'((?:[^']|'')*)'\s*\)")
 
 
-# L031 (v2.16.0): QueryParameterProcessor text-replaces these names in the SQL before
-# Dapper sees it (sb.Replace, no word boundary), so any LONGER parameter that starts
-# with one of them is cut: @UserIdList -> 7List, @DBNameOld -> KLSPL_DBOld.
-_INFRA_STATIC_KEYS = (
-    "@CommonMobiledbName", "@Community_Admin_OrgId", "@DBName", "@EDIdbName", "@EXPdbName",
-    "@HangdbName", "@HospitalitydbName", "@IMPdbName", "@LCCTdbName", "@LogdbName",
-    "@MasterdbName", "@PCSdbName", "@PGdbName", "@PassengerdbName", "@RIdbName", "@RoleId",
-    "@ScreenId", "@ScreenName", "@TSMdbName", "@TarifdbName", "@UserId", "@WFdbName",
-    "@contentmgtdbName")
+# L031 (v2.16.0): an application that text-replaces some names in the SQL before
+# Dapper sees it (no word boundary) cuts any LONGER parameter that starts with
+# one of them: with @UserId replaced, @UserIdList -> 7List. The names come from
+# the profile's prefix_replaced_parameters.
 _PARAM_NAME_RE = re.compile(r"@[A-Za-z_]\w*")
 
 
 def infra_key_collisions(sql: str) -> list[str]:
-    """Parameter names that START with an infra static key but are longer than it."""
+    """Parameter names that START with a text-replaced name but are longer than it."""
     masked = code_mask(sql)
     hits = set()
     for m in _PARAM_NAME_RE.finditer(masked):
         name = sql[m.start():m.end()]
-        for key in _INFRA_STATIC_KEYS:
+        for key in profile.current().prefix_replaced_parameters:
             if name.startswith(key) and len(name) > len(key):
                 hits.add(name)
     return sorted(hits)
@@ -2196,16 +2187,16 @@ def lint(original: str, converted: str) -> list[Warning]:
         out.append(Warning(
             "L030", Severity.WARNING,
             f"Parameter name(s) inside a longer string literal: {', '.join(unbound[:4])}. "
-            f"QueryParameterProcessor binds only an EXACT '@Name' literal, so this text is "
+            f"Only an EXACT '@Name' literal is bound as a parameter, so this text is "
             f"sent as-is and never filled in. Build it with || around a bound @param "
             f"(or pass the whole value as one parameter)."))
     collisions = infra_key_collisions(converted or original)
     if collisions:
         out.append(Warning(
             "L031", Severity.ERROR,
-            f"Parameter name(s) {', '.join(collisions[:6])} start with a name ACS's "
-            f"QueryParameterProcessor replaces as plain text (@UserId, @DBName, "
-            f"@Community_Admin_OrgId ...) before the query runs, with no word boundary: "
+            f"Parameter name(s) {', '.join(collisions[:6])} start with a name the "
+            f"application replaces as plain text (profile: prefix_replaced_parameters) "
+            f"before the query runs, with no word boundary: if @UserId is replaced, "
             f"@UserIdList becomes 7List and the query breaks. Rename the parameter "
             f"(e.g. @ListOfUserIds) here and in the C# caller."))
     if not converted:
@@ -2233,14 +2224,14 @@ def lint(original: str, converted: str) -> list[Warning]:
             "L025", Severity.WARNING,
             f"Case-sensitive comparison of lookup/config column(s) {', '.join(hits[:6])} "
             f"to a literal. SQL Server compared case-INSENSITIVELY; PostgreSQL does not "
-            f"('BookSlot' vs stored 'bookslot' = 0 rows, which switched Export "
-            f"booking off for weeks). Use UPPER(col) = UPPER('...') after checking "
+            f"('NewOrder' vs stored 'neworder' = 0 rows, which can silently "
+            f"switch a feature off). Use UPPER(col) = UPPER('...') after checking "
             f"the stored casing."))
     if _PLUS_LITERAL_RE.search(converted):
         out.append(Warning(
             "L026", Severity.WARNING,
-            "A '+' string literal is in the output. ACS's runtime ConvertSQLToPostgreSQL "
-            "rewrites + to || without respecting quotes, turning it into ' || '. Use "
+            "A '+' string literal is in the output. A runtime T-SQL converter that "
+            "rewrites + to || without respecting quotes turns it into ' || '. Use "
             "CHR(43) (R-CHAT-11)."))
     for mm in _TOCHAR_MASK_RE.finditer(converted):
         mask = mm.group(1)

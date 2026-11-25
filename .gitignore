@@ -345,92 +345,6 @@ FodyWeavers.xsd
 .idea/
 *.sln.iml
 
-# Kale Logistics Solutions - Ignore these files from commits.
-/.vs/GalaxyNext/v16/.suo
-/.vs/ProjectSettings.json
-/.vs/VSWorkspaceState.json
-/.vs/slnx.sqlite
-.vs/KLSPL/config/applicationhost.config
-.vs/KLSPL/DesignTimeBuild/.dtbcache.v2
-.vs/KLSPL/config/applicationhost.config
-
-/API_Getway/wwwroot/Barcode/*.jpg
-/API_Getway/wwwroot/XML/*.xml
-/API_Getway/wwwroot/Upload
-/API_Gateway/wwwroot/XML/*.xml
-
-/API_Getway/Logs/Error/
-/EDINotification_API/Logs/Error/
-/Export_API/Logs/Error/
-/Import_API/Logs/Error/
-/Login_API/Logs/Error/
-/Master_API/Logs/Error/
-/Stock_API/Logs/Error/
-/User_API/Logs/Error/
-/Workorder_API/Logs/Error/
-/Integration_API/Logs/Error/
-
-/API_Getway/wwwroot/Logs/Error/
-/EDINotification_API/wwwroot/Logs/Error/
-/Export_API/wwwroot/Logs/Error/
-/Import_API/wwwroot/Logs/Error/
-/Login_API/wwwroot/Logs/Error/
-/Master_API/wwwroot/Logs/Error/
-/Stock_API/wwwroot/Logs/Error/
-/User_API/wwwroot/Logs/Error/
-/Workorder_API/wwwroot/Logs/Error/
-/Integration_API/wwwroot/Logs/Error/
-
-*.dll
-*.pdb
-*.cache
-*.suo
-
-*.pdf
-*.docx
-*.rar
-*.pdf
-*.PNG
-
-.angular/
-package-lock.json
-/UI/microfrontendworkspace/.vscode
-/UI/microfrontendworkspace/.nx
-/UI/microfrontendworkspace/dist
-/UI/microfrontendworkspace/node_modules
-/UI/microfrontendworkspace/dist/
-
-.sonarqube/
-/UI/microfrontendworkspace/libs/shared/src/lib/assets/fontawesome
-/UI/microfrontendworkspace/.nx/*
-/UI/microfrontendworkspace/.nx/cache/*
-*.txt
-/coveragereport
-/.cr
-UI/microfrontendworkspace/libs/shared/ng-package.json
-UI/microfrontendworkspace/libs/shared/package.json
-
-# Claude Code config — shared team config (CLAUDE.md, .claude/settings.json, .claude/agents/) is committed;
-# personal settings and credentials stay local
-.claude/settings.local.json
-.claude/*.local.*
-.mcp.json
-
-# AI-memory generator cache
-.ai/tools/generator/.cache/
-
-# Auth token for the private Infragistics npm feed. The developer docs tell
-# people to put a token here, and both UI Dockerfiles do `COPY . .` - so this
-# must never be committed and never enter a build context (see .dockerignore).
-.npmrc
-
-# MsSqlToPg: PyInstaller intermediates, build output and the run logs. Every test run and build
-# rewrites them (logs/runs keeps the last 20 conversions).
-/build/
-/logs/
-/dist/
-
-
 # ---- MsSqlToPg repo rules (kept from the GitHub repo) ----
 # PyInstaller output — 65 MB of rebuildable artefacts
 build/
@@ -450,3 +364,8 @@ logs/
 
 # codegraph index (local only, never committed)
 .codegraph/
+
+# local, project-specific settings -- they describe YOUR schema, never commit them
+project_profile.json
+boolean_columns.txt
+column_types.txt

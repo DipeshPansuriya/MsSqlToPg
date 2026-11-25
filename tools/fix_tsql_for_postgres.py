@@ -20,6 +20,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core import profile                                   # noqa: E402
+
 
 @dataclass
 class Fix:
@@ -82,12 +86,6 @@ FIXES: list[Fix] = [
         r"\bCAST\s*\(\s*1\s+AS\s+BIT\s*\)", "TRUE",
     ),
     Fix(
-        "F007-dbo-prefix",
-        "PostgreSQL has no 'dbo' schema. Function calls must drop the prefix "
-        "(and the function itself has to be ported).",
-        r"\bdbo\.(fnGetLocalTime)\b", r"\1",
-    ),
-    Fix(
         "F008-date-literal",
         "DD-MM-YYYY fails under PostgreSQL's default DateStyle -- it reads 31 "
         "as the month. ISO format is unambiguous.",
@@ -101,7 +99,7 @@ FIXES: list[Fix] = [
     ),
     Fix(
         "F010-update-set-same-line",
-        "ACS's runtime splitter treats a line-leading SET as a new statement "
+        "A keyword-based statement splitter treats a line-leading SET as a new statement "
         "and appends ';', causing 42601. UPDATE and SET must share a line.",
         r"(?im)^([ \t]*UPDATE\b[^\n;]*?)[ \t]*\n[ \t]*(?=SET\b)", r"\1 ",
     ),
@@ -112,16 +110,10 @@ FIXES: list[Fix] = [
 MANUAL: list[Fix] = [
     Fix(
         "M001-cross-database",
-        "PostgreSQL cannot query across databases. 'qa_lpms_final.dbo.Table' "
+        "PostgreSQL cannot query across databases. 'qa_app_final.dbo.Table' "
         "must become 'schema.Table' inside ONE database -- decide the schema "
         "and rewrite, or create a foreign-data wrapper.",
         r"\b\w+\.(?:dbo|\[dbo\])\.\[?\w+\]?", "", manual=True,
-    ),
-    Fix(
-        "M002-udf",
-        "fnGetLocalTime is a user-defined function -- it must be ported to "
-        "PL/pgSQL and exist in the target database before this query runs.",
-        r"\bfnGetLocalTime\b", "", manual=True,
     ),
     Fix(
         "M003-bit-column",
@@ -145,10 +137,44 @@ MANUAL: list[Fix] = [
 ]
 
 
+def _udf_pattern() -> str | None:
+    names = profile.current().local_time_functions
+    return "|".join(re.escape(n) for n in names) if names else None
+
+
+def _fixes() -> list[Fix]:
+    """FIXES plus the profile-driven F007, in its place before F008."""
+    udf = _udf_pattern()
+    if not udf:
+        return FIXES
+    f007 = Fix(
+        "F007-dbo-prefix",
+        "PostgreSQL has no 'dbo' schema. Function calls must drop the prefix "
+        "(and the function itself has to be ported).",
+        rf"\bdbo\.({udf})\b", r"\1")
+    at = next(i for i, fix in enumerate(FIXES) if fix.code.startswith("F008"))
+    return FIXES[:at] + [f007] + FIXES[at:]
+
+
+def _manual() -> list[Fix]:
+    """MANUAL plus the profile-driven M002, in its place before M003."""
+    udf = _udf_pattern()
+    if not udf:
+        return MANUAL
+    m002 = Fix(
+        "M002-udf",
+        f"{', '.join(profile.current().local_time_functions)} is a user-defined function -- "
+        "it must be ported to PL/pgSQL and exist in the target database before this "
+        "query runs.",
+        rf"\b(?:{udf})\b", "", manual=True)
+    at = next(i for i, fix in enumerate(MANUAL) if fix.code.startswith("M003"))
+    return MANUAL[:at] + [m002] + MANUAL[at:]
+
+
 def apply_fixes(sql: str) -> tuple[str, list[tuple[str, int, str]]]:
     """Return (fixed_sql, [(code, count, why)])."""
     report: list[tuple[str, int, str]] = []
-    for fix in FIXES:
+    for fix in _fixes():
         fixed, count = re.subn(fix.pattern, fix.replacement, sql, flags=fix.flags)
         if count:
             report.append((fix.code, count, fix.why))
@@ -158,7 +184,7 @@ def apply_fixes(sql: str) -> tuple[str, list[tuple[str, int, str]]]:
 
 def find_manual(sql: str) -> list[tuple[str, int, str]]:
     found: list[tuple[str, int, str]] = []
-    for fix in MANUAL:
+    for fix in _manual():
         count = len(re.findall(fix.pattern, sql, flags=fix.flags))
         if count:
             found.append((fix.code, count, fix.why))
