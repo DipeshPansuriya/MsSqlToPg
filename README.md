@@ -15,12 +15,26 @@ machine. Safe to hand to anyone.
 
 ## Latest release — v2.18.1
 
-Download the self-contained Windows executable from the
-[releases page](https://github.com/DipeshPansuriya/MsSqlToPg/releases):
+**[Download `MsSqlToPg.exe`](https://github.com/DipeshPansuriya/MsSqlToPg/releases/download/v2.18.1/MsSqlToPg.exe)** — 16.9 MB, one file, no Python or prerequisites needed.
 
-- **`MsSqlToPg.exe`** — ~17 MB, one file, no Python or prerequisites needed
-- `boolean_columns.txt` / `column_types.txt` — optional schema hint files shipped beside the exe
-- `boolean_columns_query.sql` / `column_types_query.sql` — read-only queries to regenerate those files
+```
+SHA-256  0b4305b6999fc66179e3412722e320929591f80e47500f5f7828e8438979581c
+```
+
+Verify with `shasum -a 256 MsSqlToPg.exe` (macOS/Linux) or
+`Get-FileHash MsSqlToPg.exe -Algorithm SHA256` (Windows).
+
+The binary is built on `windows-latest` by the
+[`Release` workflow](.github/workflows/release.yml) from the tagged source. The
+workflow runs the full test suite, builds with both load-bearing
+`--collect-all` flags, and smoke-tests a console twin built with identical flags
+— including a check that the bundle really prints `PostgreSQL syntax: VALID`, so
+a build without the real PostgreSQL parser cannot be published.
+
+Optional schema hints (`boolean_columns.txt`, `column_types.txt`) are **not**
+shipped in the release — they describe *your* database. Generate them with
+`boolean_columns_query.sql` / `column_types_query.sql`, or from a DDL script with
+`python -m tools.schema_from_ddl`, and place them beside the exe.
 
 See the [changelog](#changelog) below for what changed in each version.
 
