@@ -45,6 +45,48 @@ def test_accepts_dapper_parameters(sql):
 
 
 # --------------------------------------------------------------------------
+# Dapper placeholders in RESTRICTED grammar positions
+#
+# libpg_query accepts @Name in an expression only by accident -- `@` is the
+# prefix absolute-value operator, so `a = @Id` reads as `a = @(Id)`. Positions
+# that take no prefix operator rejected the same placeholder outright, which
+# failed every paginated query and left its source as T-SQL.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sql", [
+    "SELECT a FROM t ORDER BY a OFFSET 0 ROWS FETCH NEXT @TopRecords ROWS ONLY",
+    "SELECT a FROM t ORDER BY a FETCH FIRST @Top ROWS ONLY",
+    "SELECT a FROM t OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY",
+])
+def test_accepts_dapper_parameters_in_fetch_clause(sql):
+    result = validator.validate(sql)
+    assert result.valid, f"{sql}\n{result.errors}"
+
+
+def test_masking_ignores_at_inside_string_literals_and_comments():
+    """An @ in a literal or a comment is not a placeholder, and masking it
+    must not change the verdict."""
+    assert validator.validate(
+        "SELECT 'user@example.com' AS a FROM t -- see @ticket\n").valid
+    assert validator.validate(
+        "/* @note */ SELECT a FROM t WHERE b = @Id").valid
+
+
+def test_masking_is_length_preserving_so_offsets_stay_accurate():
+    """Error positions are reported against the ORIGINAL text, so the mask must
+    not shift any character."""
+    sql = "SELECT @VeryLongParameterName, @b FROM t"
+    assert len(validator._mask_dapper_parameters(sql)) == len(sql)
+
+
+def test_masking_leaves_tsql_system_variables_alone():
+    """@@ROWCOUNT is not a Dapper placeholder -- it must stay invalid so the
+    conversion is still flagged rather than silently accepted."""
+    masked = validator._mask_dapper_parameters("SELECT @@ROWCOUNT")
+    assert "@@ROWCOUNT" in masked
+
+
+# --------------------------------------------------------------------------
 # Rejects what the linter might miss
 # --------------------------------------------------------------------------
 
@@ -134,3 +176,46 @@ def test_insights_lead_with_the_syntax_verdict():
                             result.validation)
     assert data.syntax == "VALID"
     assert "PostgreSQL syntax: VALID" in insights.render_text(data)
+
+
+# --------------------------------------------------------------------------
+# Dapper IN-list expansion (`IN @Ids`)
+# --------------------------------------------------------------------------
+
+def test_dapper_in_list_validates():
+    """`IN @Ids` is Dapper list-expansion, not SQL -- Dapper rewrites it to
+    `IN (@Ids1, @Ids2, ...)` at execution. Masking `@Ids` to `$1` is not
+    enough: `IN $1` is still rejected, because IN needs a parenthesised list.
+    138 occurrences across 26 ACS files were failing validation on this."""
+    assert validator.validate(
+        "SELECT a FROM t WHERE Id IN @JobIds AND x = 1").valid
+
+
+def test_dapper_in_list_is_case_insensitive():
+    assert validator.validate("SELECT a FROM t WHERE Id in @Ids").valid
+
+
+def test_dapper_in_list_with_short_name():
+    """Too short to pad back to the original width -- must still validate."""
+    assert validator.validate("SELECT a FROM t WHERE Id IN @Id").valid
+
+
+def test_ordinary_in_lists_are_unaffected():
+    assert validator.validate("SELECT a FROM t WHERE Id IN (1, 2, 3)").valid
+    assert validator.validate(
+        "SELECT a FROM t WHERE Id IN (SELECT b FROM u)").valid
+
+
+def test_in_at_inside_a_string_literal_is_not_masked():
+    assert validator.validate(
+        "SELECT a FROM t WHERE Name = 'x IN @notaparam'").valid
+
+
+def test_in_list_param_survives_conversion_byte_for_byte():
+    """Dapper must still see `IN @JobIds` -- masking is validation-only."""
+    from core import orchestrator
+    result = orchestrator.convert(
+        "SELECT MasterJobId FROM EXP_JOB_Master WITH(NOLOCK) "
+        "WHERE MasterJobId IN @JobIds AND IsDeleted = 0")
+    assert "IN @JobIds" in result.sql
+    assert result.validation and result.validation.valid

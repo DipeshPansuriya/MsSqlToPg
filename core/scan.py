@@ -16,6 +16,7 @@ Use dry_run=True to see exactly what would happen without touching anything.
 
 from __future__ import annotations
 
+import codecs
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -23,12 +24,63 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from core import csharp, orchestrator
+from core import csharp, interpolation, orchestrator
 from core.models import ConversionResult, Severity
 
 MAX_WORKERS = 8
 MAX_FILE_BYTES = 5 * 1024 * 1024      # skip anything implausible for source
 BACKUP_SUFFIX = ".bak"
+
+# Last-resort decode for source Visual Studio saved in the Windows ANSI code
+# page. cp1252 gives every byte 0x00-0xFF a meaning, so it never raises.
+LEGACY_ENCODING = "cp1252"
+
+
+def read_source(path: Path) -> tuple[str, str]:
+    """Return (text, encoding to write it back with).
+
+    Almost all source is UTF-8, with or without a BOM. A file saved as Windows
+    ANSI decodes as neither, and a strict UTF-8 read raises UnicodeDecodeError
+    -- which used to fail the entire file before a single query was looked at,
+    even when the offending byte was an em-dash sitting in a comment
+    (`0x97` in cp1252) with no bearing on the SQL.
+
+    The encoding travels back with the text so a rewrite can restore the file
+    exactly as it was found. Normalising a cp1252 file to UTF-8 would change
+    bytes outside the SQL literals, which is the one thing this scanner
+    promises never to do.
+    """
+    raw = path.read_bytes()
+
+    # cp1252 gives almost every byte a meaning, so without this guard a binary
+    # file that happens to be named *.cs would "decode" into mojibake and be
+    # reported CLEAN instead of FAILED. No C# source contains a NUL.
+    if b"\x00" in raw:
+        raise UnicodeDecodeError(
+            LEGACY_ENCODING, raw, 0, 1,
+            "binary content (NUL byte) -- not C# source")
+
+    if raw.startswith(codecs.BOM_UTF8):
+        return raw.decode("utf-8-sig"), "utf-8-sig"
+    try:
+        return raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        return raw.decode(LEGACY_ENCODING), LEGACY_ENCODING
+
+def dominant_newline(text: str) -> str:
+    """The line ending the file actually uses.
+
+    read_source() decodes bytes without translation, so `text` carries the
+    real terminators. Converted SQL always arrives with "\\n"; inserting that
+    into a CRLF file unchanged leaves the rewritten literals as the only
+    LF-only lines, which shows up as a whole-file diff in git and a mixed
+    file in the editor. Ties go to CRLF -- a lone stray LF in a CRLF file is
+    the anomaly, not the convention.
+    """
+    crlf = text.count("\r\n")
+    lf = text.count("\n") - crlf
+    return "\r\n" if crlf >= lf and crlf else "\n"
+
 
 REWRITTEN = "REWRITTEN"
 SKIPPED = "SKIPPED"
@@ -52,6 +104,7 @@ class FileReport:
     status: str = CLEAN
     error: str = ""
     backup: Path | None = None
+    encoding: str = "utf-8"           # what the file was read as, and rewritten as
 
     @property
     def rewritten(self) -> int:
@@ -121,8 +174,8 @@ def _process(path: Path, dry_run: bool) -> FileReport:
             report.status = SKIPPED
             report.error = "file too large to be source"
             return report
-        text = path.read_text(encoding="utf-8-sig", errors="strict")
-    except (OSError, UnicodeDecodeError) as exc:
+        text, report.encoding = read_source(path)
+    except (OSError, UnicodeDecodeError, LookupError) as exc:
         report.status = FAILED
         report.error = f"{type(exc).__name__}: {exc}"
         return report
@@ -134,20 +187,51 @@ def _process(path: Path, dry_run: bool) -> FileReport:
         report.error = f"scan failed: {type(exc).__name__}: {exc}"
         return report
 
+    # SQL FRAGMENTS: literals that carry T-SQL but are not whole statements
+    # (scalar subqueries, CASE expressions, WHERE predicates, column mappings)
+    # which C# splices into a larger query at runtime. They cannot be rewritten
+    # -- a fragment has no FROM clause, so its aliases and target context are
+    # unknowable -- but they MUST be reported: the T-SQL in them still reaches
+    # the database, and before this they were neither converted nor mentioned.
+    try:
+        for fragment in csharp.find_sql_fragments(text):
+            report.findings.append(Finding(
+                fragment.line, fragment.kind, SKIPPED,
+                "T-SQL FRAGMENT (not a full statement -- convert by hand): "
+                + ", ".join(csharp.tsql_markers(fragment.sql))))
+    except Exception as exc:      # a reporting extra must never fail a scan
+        report.findings.append(Finding(
+            0, "", SKIPPED, f"fragment scan skipped: {type(exc).__name__}"))
+
     if not literals:
         return report
 
+    newline = dominant_newline(text)
     replacements: list[tuple[csharp.SqlLiteral, str]] = []
     for literal in literals:
-        if literal.interpolated:
+        holes: list[str] | None = None
+        sql_to_convert = literal.sql
+        # v2.16.0: a piece of a query C# assembles (StringBuilder.Append, +, +=) is never
+        # converted alone -- it would end in `;` while T-SQL pieces are appended after it
+        piece = csharp.composed_query(text, literal)
+        if piece:
             report.findings.append(Finding(
                 literal.line, literal.kind, SKIPPED,
-                "interpolated string -- {expr} holes are dynamic SQL, "
-                "convert this one by hand"))
+                f"piece of a query assembled in C# ({piece}) -- convert the whole query by "
+                f"hand; converting one piece breaks it at runtime"))
             continue
+        if literal.interpolated:
+            masked = interpolation.mask_holes(literal.sql)
+            if masked is None:
+                report.findings.append(Finding(
+                    literal.line, literal.kind, SKIPPED,
+                    "interpolated string with unsafe {expr} holes (escaped "
+                    "braces, nested quotes/braces) -- convert this one by hand"))
+                continue
+            sql_to_convert, holes = masked
 
         try:
-            result = orchestrator.convert(literal.sql)
+            result = orchestrator.convert(sql_to_convert)
         except Exception as exc:
             report.findings.append(Finding(
                 literal.line, literal.kind, FAILED,
@@ -160,11 +244,38 @@ def _process(path: Path, dry_run: bool) -> FileReport:
                 "conversion needs review -- left unchanged", result))
             continue
 
+        converted_sql = result.sql
+        if holes is not None:
+            restored = interpolation.restore_holes(converted_sql, holes)
+            if restored is None:
+                report.findings.append(Finding(
+                    literal.line, literal.kind, SKIPPED,
+                    "conversion moved or dropped a {expr} hole -- left "
+                    "unchanged, convert this one by hand"))
+                continue
+            converted_sql = restored
+
+        # v2.16.0: keep the literal's own ending. A constant written without a final `;` may be
+        # extended by C# elsewhere (`InsertAudit + " RETURNING Id;"`); the engine's added `;`
+        # would turn that into `...; RETURNING Id;` -- a syntax error at runtime.
+        if not literal.sql.rstrip().endswith(";"):
+            stripped = converted_sql.rstrip()
+            if stripped.endswith(";"):
+                converted_sql = stripped[:-1].rstrip()
+
         indent = csharp.line_indent(text, literal.start) + "    "
-        body = csharp.reindent(result.sql, indent)
-        replacements.append((literal, csharp.encode(literal.kind, body)))
+        body = csharp.reindent(converted_sql, indent)
+        # The engine always emits "\n". A CRLF file must stay CRLF THROUGHOUT,
+        # or the rewritten literals become the only LF-only lines in the file.
+        if newline != "\n":
+            body = body.replace("\n", newline)
+        encoded = csharp.encode(literal.kind, body)
+        if literal.interpolated:
+            encoded = "$" + encoded
+        replacements.append((literal, encoded))
+        note = f"{len(holes)} {{expr}} hole(s) preserved" if holes else ""
         report.findings.append(Finding(
-            literal.line, literal.kind, REWRITTEN, "", result))
+            literal.line, literal.kind, REWRITTEN, note, result))
 
     if not replacements:
         report.status = CLEAN if report.findings else CLEAN
@@ -178,11 +289,18 @@ def _process(path: Path, dry_run: bool) -> FileReport:
         backup = path.with_suffix(path.suffix + BACKUP_SUFFIX)
         if not backup.exists():
             shutil.copy2(path, backup)
-        path.write_text(csharp.replace_literals(text, replacements),
-                        encoding="utf-8")
+        # Same encoding it was read with, so the only bytes that move are the
+        # SQL literals themselves.
+        #
+        # newline="" is LOAD-BEARING. read_source() decodes bytes directly, so
+        # `text` still holds the file's real "\r\n"; the default newline=None
+        # would translate every "\n" to os.linesep and turn each of those into
+        # "\r\r\n" -- one extra CR per run, compounding on every rescan.
+        with path.open("w", encoding=report.encoding, newline="") as handle:
+            handle.write(csharp.replace_literals(text, replacements))
         report.backup = backup
         report.status = REWRITTEN
-    except OSError as exc:
+    except (OSError, UnicodeEncodeError) as exc:
         report.status = FAILED
         report.error = f"could not write file: {exc}"
     return report
@@ -258,6 +376,12 @@ def render_report(report: ScanReport) -> str:
         lines.append(f"### `{shown}` -- {item.status}")
         if item.error:
             lines.append(f"- {item.error}")
+        if item.encoding == LEGACY_ENCODING:
+            lines.append(
+                f"- encoding: **{LEGACY_ENCODING}** (not UTF-8) -- read and "
+                "rewritten in place as-is. Re-save the file as UTF-8 when "
+                "convenient; the offending bytes are usually punctuation such "
+                "as an em-dash in a comment.")
         if item.backup:
             lines.append(f"- backup: `{item.backup.name}`")
         for finding in item.findings:

@@ -74,3 +74,6 @@ Source code goes to `E:\Project\MsSqlToPg\` (explicitly authorised by Dipesh).
 Bash heredocs mangle Python containing backticks, `\n`, or `$`. Backticks get
 executed by the shell; `\\n` collapses. **Use the Write/Edit tools for any file
 content with escapes or markdown backticks** — not `python - <<'EOF'`.
+
+- **Rule book sync:** any change that adds or alters a conversion rule MUST update CONVERSION_RULES.md (and TOOL_UPDATE.md status if applicable) in the same commit. Bump core/version.py MINOR for new rules.
+

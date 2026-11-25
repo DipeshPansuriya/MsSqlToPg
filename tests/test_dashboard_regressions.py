@@ -126,14 +126,14 @@ def test_cross_database_reference_is_auto_corrected():
     """PostgreSQL cannot query across databases. With everything in ONE
     database, the db.dbo. qualifier is simply dropped."""
     result = orchestrator.convert(fixture("dashboard_cross_database.sql"))
-    assert "qa_northwind_final" not in result.sql
+    assert "qa_lpms_final" not in result.sql
     assert "A009" in codes(result)
     assert "L013" not in codes(result)
 
 
 def test_l013_reports_each_database_once():
-    sql = ("SELECT * FROM qa_northwind_final.dbo.A "
-           "JOIN qa_northwind_final.dbo.B ON 1=1 "
+    sql = ("SELECT * FROM qa_lpms_final.dbo.A "
+           "JOIN qa_lpms_final.dbo.B ON 1=1 "
            "JOIN other_db.dbo.C ON 1=1")
     warnings = linter.l013_cross_database_reference("", sql, sql)
     assert len(warnings) == 2, "one per database, not per reference"
@@ -246,7 +246,7 @@ def test_fix_script_leaves_cross_database_for_a_human():
     """L013 needs a schema decision only the developer can make -- it must NOT
     be silently rewritten."""
     fixed, _ = fixer.apply_fixes(fixture("dashboard_cross_database.sql"))
-    assert "qa_northwind_final.dbo" in fixed
+    assert "qa_lpms_final.dbo" in fixed
     assert fixer.find_manual(fixed), "it must at least be REPORTED"
 
 
@@ -338,8 +338,8 @@ def test_the_whole_dashboard_query_now_validates():
 
 def test_cross_database_qualifier_is_stripped():
     result = orchestrator.convert(
-        "SELECT * FROM qa_northwind_final.dbo.Inv_Invoice")
-    assert "qa_northwind_final" not in result.sql
+        "SELECT * FROM qa_lpms_final.dbo.Inv_Invoice")
+    assert "qa_lpms_final" not in result.sql
     assert "dbo" not in result.sql
     assert "Inv_Invoice" in result.sql
     assert "A009" in codes(result)
@@ -348,8 +348,8 @@ def test_cross_database_qualifier_is_stripped():
 
 def test_bracketed_dbo_qualifier_is_stripped():
     result = orchestrator.convert(
-        "SELECT * FROM qa_northwind_final.[dbo].[Master_VehicleType]")
-    assert "qa_northwind_final" not in result.sql and "dbo" not in result.sql
+        "SELECT * FROM qa_lpms_final.[dbo].[Master_VehicleType]")
+    assert "qa_lpms_final" not in result.sql and "dbo" not in result.sql
 
 
 def test_dbo_qualified_function_call_is_stripped():
@@ -378,3 +378,77 @@ def test_unqualified_tables_are_untouched():
     result = orchestrator.convert("SELECT * FROM Shipment_Master")
     assert "A009" not in codes(result)
     assert "Shipment_Master" in result.sql
+
+
+# --------------------------------------------------------------------------
+# A010 -- runtime database-name placeholders (@MasterdbName.dbo.Table)
+# --------------------------------------------------------------------------
+# Real pattern from a 1,292-query production scan: the application
+# string-replaces @MasterdbName / @DBName with an actual database name at
+# runtime (QueryParameterProcessor). Dropping the placeholder (plain A009)
+# silently repointed 316 queries at the wrong database. The placeholder must
+# survive -- as a QUOTED schema qualifier, which real PostgreSQL grammar
+# accepts and the runtime substitution keeps working.
+
+def test_bracketed_placeholder_becomes_quoted_schema(monkeypatch):
+    monkeypatch.setenv("MSSQLTOPG_DB_PLACEHOLDER", "schema")   # pre-2.16 mode
+    result = orchestrator.convert(
+        "SELECT AirportCode FROM [@MasterdbName].[dbo].[Master_Airport] "
+        "WITH(NOLOCK) WHERE OrgId = @OrgId")
+    assert '"@MasterdbName"' in result.sql
+    assert "dbo" not in result.sql
+    assert "A010" in codes(result)
+    assert result.validation is not None and result.validation.valid
+    assert result.is_usable
+    # the Dapper parameter is untouched alongside the placeholder
+    assert "@OrgId" in result.sql
+
+
+def test_unbracketed_placeholder_is_also_preserved(monkeypatch):
+    monkeypatch.setenv("MSSQLTOPG_DB_PLACEHOLDER", "schema")   # pre-2.16 mode
+    """Unbracketed `@X.dbo.T` parses as Parameter(Var), not Identifier --
+    the shape that originally slipped past the placeholder guard."""
+    result = orchestrator.convert("SELECT * FROM @MasterdbName.dbo.Orders")
+    assert '"@MasterdbName"' in result.sql
+    assert "A010" in codes(result)
+    assert "A009" not in codes(result)
+
+
+def test_two_part_placeholder_in_schema_position(monkeypatch):
+    monkeypatch.setenv("MSSQLTOPG_DB_PLACEHOLDER", "schema")   # pre-2.16 mode
+    result = orchestrator.convert("SELECT * FROM [@DBName].[Orders]")
+    assert '"@DBName"' in result.sql
+    assert "A010" in codes(result)
+    assert result.validation is not None and result.validation.valid
+
+
+def test_placeholder_with_real_schema_is_refused_and_flagged(monkeypatch):
+    monkeypatch.setenv("MSSQLTOPG_DB_PLACEHOLDER", "schema")   # pre-2.16 mode
+    """REFUSAL: [@X].[reporting].[T] has no two-level PostgreSQL mapping.
+    PostgreSQL's parser ACCEPTS three-part names (only execution rejects
+    them), so validation alone cannot catch the leftover -- L015 must."""
+    result = orchestrator.convert(
+        "SELECT * FROM [@MasterdbName].[reporting].[Sales]")
+    assert '"@MasterdbName"' in result.sql          # nothing dropped
+    assert "reporting" in result.sql
+    assert "L015" in codes(result)
+    assert not result.is_usable                     # ERROR blocks scan rewrite
+
+
+def test_literal_database_name_is_not_mistaken_for_a_placeholder():
+    result = orchestrator.convert(
+        "SELECT * FROM qa_lpms_final.dbo.Inv_Invoice")
+    assert "A010" not in codes(result)
+    assert "A009" in codes(result)
+    assert "qa_lpms_final" not in result.sql
+
+
+def test_declared_local_is_not_mistaken_for_a_placeholder():
+    """Same disambiguator as Dapper parameters: a DECLAREd name in a
+    qualifier position (`@xmlData.nodes(...)`) is a T-SQL local, not a
+    database placeholder -- A010 must leave it for L004."""
+    result = orchestrator.convert(
+        "DECLARE @xmlData XML\n"
+        "SELECT * FROM @xmlData.nodes('/root') AS T(c)")
+    assert "A010" not in codes(result)
+    assert not result.is_usable                     # L004 keeps it skipped

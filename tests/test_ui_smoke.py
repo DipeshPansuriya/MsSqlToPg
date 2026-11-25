@@ -44,6 +44,34 @@ def convert(app):
     return app.convert_tab
 
 
+def test_three_tabs_are_present(app):
+    assert app.convert_tab is not None
+    assert app.scan_tab is not None
+    assert app.liquibase_tab is not None
+
+
+def test_liquibase_tab_builds_its_widgets(app):
+    tab = app.liquibase_tab
+    assert tab.folder.get() == ""
+    assert tab.recursive.get() is True
+    assert tab.tree["columns"] == ("status", "changesets", "added",
+                                   "repaired", "attention", "detail")
+    assert tab.repair.get() is True
+    assert "changelog" in tab.status.get().lower()
+
+
+def test_liquibase_tab_refuses_an_invalid_folder(app, monkeypatch):
+    """A bad path must warn, not raise, and must not start a run."""
+    import ui.main_window as window
+    warned = []
+    monkeypatch.setattr(window.messagebox, "showwarning",
+                        lambda *a, **k: warned.append(a))
+    app.liquibase_tab.folder.set("")
+    app.liquibase_tab.run(dry_run=True)
+    assert warned
+    assert app.liquibase_tab._running is False
+
+
 # --------------------------------------------------------------------------
 # Construction
 # --------------------------------------------------------------------------

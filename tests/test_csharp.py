@@ -7,6 +7,27 @@ matched.
 
 import pytest
 
+from core import csharp as _csharp_for_leading_semicolon
+
+
+def test_leading_semicolon_cte_is_recognised_as_sql():
+    """`;WITH cte AS (...)` is the standard T-SQL defensive CTE idiom. It used
+    to fail the is-this-SQL shape test, so the literal was never offered to the
+    converter and never reported -- a silent miss."""
+    src = '''class Q { public static readonly string A = @"
+        ;WITH SHCWithGroupCTE AS (
+            SELECT Code FROM Master_SHC
+        )
+        SELECT Code FROM SHCWithGroupCTE"; }'''
+    found = _csharp_for_leading_semicolon.find_sql_literals(src)
+    assert len(found) == 1, found
+    assert "SHCWithGroupCTE" in found[0].sql
+
+
+def test_leading_semicolon_alone_is_not_sql():
+    src = 'class Q { public static readonly string A = @";  just text, no keywords"; }'
+    assert _csharp_for_leading_semicolon.find_sql_literals(src) == []
+
 from core import csharp
 
 
@@ -153,3 +174,65 @@ def test_reindent_matches_surrounding_style():
     out = csharp.reindent("SELECT\n  a\nFROM t", indent)
     assert out.startswith("\n        SELECT")
     assert "\n          a" in out
+
+
+# --------------------------------------------------------------------------
+# SQL fragments -- reported, never rewritten
+# --------------------------------------------------------------------------
+# A fragment is a literal C# splices into a larger query: a scalar subquery, a
+# CASE expression, a column mapping. It fails the whole-statement shape test,
+# so before this it was neither converted NOR reported -- yet the T-SQL inside
+# it still reached the database. ExportJobQueries.cs had 6 of them.
+
+def test_colmap_scalar_subquery_is_a_fragment():
+    sql = ("(SELECT TOP 1 OrgName FROM Organization WITH(NOLOCK) "
+           "WHERE OrgId = Job2.GHAId AND ISNULL(IsDeleted,0) = 0)")
+    assert csharp.looks_like_sql_fragment(sql)
+    assert "WITH (NOLOCK)" in csharp.tsql_markers(sql)
+    assert "TOP n" in csharp.tsql_markers(sql)
+
+
+def test_case_expression_fragment_is_detected():
+    assert csharp.looks_like_sql_fragment(
+        "CASE WHEN ISNULL(Job.IsConsolJob,0)=1 THEN 'Consol' ELSE 'Direct' END")
+
+
+def test_bare_predicate_fragment_is_detected():
+    """No clause keyword at all -- qualifies via the comparison operator."""
+    assert csharp.looks_like_sql_fragment("ISNULL(a,0)=0 AND b=1")
+
+
+def test_clean_ansi_fragment_is_not_reported():
+    """Nothing to convert -- a finding here would be pure noise."""
+    assert not csharp.looks_like_sql_fragment(
+        "Job.ShipmentDate >= @InputDateFrom AND Job.ShipmentDate < @InputDateTo")
+    assert not csharp.looks_like_sql_fragment(
+        "CONCAT(Job.Prefix, '-', Job.AWBNumberId)")
+
+
+def test_full_statement_is_not_a_fragment():
+    """The two scans must not both claim the same literal."""
+    sql = "SELECT a FROM t WHERE ISNULL(x,0)=0"
+    assert csharp.looks_like_sql(sql)
+    assert not csharp.looks_like_sql_fragment(sql)
+
+
+def test_prose_is_never_a_fragment():
+    """Regression: '[Enter]' matched the bracket marker and 'and' matched the
+    old hint, so an ordinary message was reported as T-SQL."""
+    assert not csharp.looks_like_sql_fragment("Press [Enter] and we will send it")
+    assert not csharp.looks_like_sql_fragment("just a message, not SQL")
+    assert not csharp.looks_like_sql_fragment("1=1")
+    assert not csharp.looks_like_sql_fragment("")
+
+
+def test_find_sql_fragments_skips_comments():
+    src = '// var x = "(SELECT TOP 1 a FROM t WITH(NOLOCK))";\nint y = 1;'
+    assert csharp.find_sql_fragments(src) == []
+
+
+def test_find_sql_fragments_reports_line_numbers():
+    src = ('class C\n{\n    const string M = '
+           '"(SELECT TOP 1 a FROM t WITH(NOLOCK))";\n}')
+    found = csharp.find_sql_fragments(src)
+    assert len(found) == 1 and found[0].line == 3
