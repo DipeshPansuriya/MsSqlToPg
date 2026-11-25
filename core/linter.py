@@ -351,6 +351,52 @@ def l014_ambiguous_date_literal(original: str, converted: str,
     return out
 
 
+def l016_insert_returning_split(original: str, converted: str,
+                                masked: str) -> list[Warning]:
+    """RETURNING separated from its INSERT by ';'. The clause must belong to
+    the same statement -- split off, PostgreSQL raises 42601 at RETURNING.
+    Common ACS shape: the C# caller appends ` RETURNING Logid;` to a base
+    query that already ends with ';'.
+
+    Checked against the ORIGINAL as well as the output: SQLGlot silently
+    drops a dangling RETURNING statement, which hides the defect."""
+    out: list[Warning] = []
+    seen: set[int] = set()
+    for text in (masked, original):
+        for m in re.finditer(r";\s*RETURNING\b", text, re.IGNORECASE):
+            line = _line_of(text, m.start())
+            if line in seen:
+                continue
+            seen.add(line)
+            out.append(Warning(
+                "L016", Severity.ERROR,
+                "RETURNING is cut off from its INSERT by a ';' -- PostgreSQL "
+                "raises 42601. Remove the semicolon so RETURNING stays part "
+                "of the INSERT statement (check for a trailing ';' in the "
+                "base query when C# appends RETURNING).",
+                line,
+            ))
+    return out
+
+
+def l017_quoted_identifiers(original: str, converted: str,
+                            masked: str) -> list[Warning]:
+    """Double-quoted identifiers in the output. Correct SQL, but when the
+    query is pasted into a C# verbatim @"..." string every double quote must
+    be doubled ("key" -> ""key"") or the literal terminates early."""
+    m = re.search(r'"[A-Za-z_@][\w .]*"', masked)
+    if m is None:
+        return []
+    return [Warning(
+        "L017", Severity.INFO,
+        'Output contains "quoted" identifiers. Inside a C# verbatim @"..." '
+        'string, escape each double quote by doubling it (SCMH."key" -> '
+        'SCMH.""key"") or the string literal ends early and the file no '
+        'longer compiles.',
+        _line_of(masked, m.start()),
+    )]
+
+
 ALL_RULES: list[RuleFn] = [
     l001_string_concat,
     l002_varchar_max,
@@ -365,6 +411,8 @@ ALL_RULES: list[RuleFn] = [
     l012_windows_timezone,
     l013_cross_database_reference,
     l014_ambiguous_date_literal,
+    l016_insert_returning_split,
+    l017_quoted_identifiers,
 ]
 
 
@@ -439,6 +487,95 @@ def l010_unparsed_ast(expressions: list) -> list[Warning]:
     return out
 
 
+# --------------------------------------------------------------------------
+# L015 -- AST-based: a database (catalog) qualifier survived auto-fix
+# --------------------------------------------------------------------------
+# Only the A010 refusal case reaches here: a runtime placeholder combined with
+# a real (non-dbo) schema, e.g. [@MasterdbName].[reporting].[Sales]. A009
+# strips literal catalogs and A010 converts placeholder ones, so anything left
+# is a three-part reference with no automatic two-level mapping. PostgreSQL's
+# grammar ACCEPTS three-part names and only rejects them at RUNTIME
+# ("cross-database references are not implemented"), so the validator cannot
+# catch this -- the AST is the only reliable signal.
+
+def l015_surviving_catalog(expressions: list) -> list[Warning]:
+    try:
+        from sqlglot import expressions as exp
+    except ImportError:  # pragma: no cover - sqlglot is a hard dependency
+        return []
+    from core.autofix import placeholder_name
+
+    out: list[Warning] = []
+    for tree in expressions:
+        if tree is None or isinstance(tree, exp.Command):
+            continue
+        for table in tree.find_all(exp.Table):
+            catalog = table.args.get("catalog")
+            if catalog is None:
+                continue
+            name = placeholder_name(catalog) or table.text("catalog") or "?"
+            out.append(Warning(
+                "L015", Severity.ERROR,
+                f"Three-part reference survives: {table.sql()!r}. PostgreSQL "
+                f"cannot query across databases, and '{name}' combined with a "
+                f"non-default schema has no automatic mapping -- restructure "
+                f"by hand (e.g. one schema per source database).",
+            ))
+    return out
+
+
+# --------------------------------------------------------------------------
+# L018 -- AST-based: UPDATE still targets a FROM alias
+# --------------------------------------------------------------------------
+# Only A019's refusal case reaches here: `UPDATE S SET ... FROM a X JOIN b S
+# ON ...`. PostgreSQL resolves the UPDATE target before FROM, so `UPDATE S`
+# names a real table S -- the grammar check passes and the query dies at
+# runtime with 'relation "s" does not exist'. Converting the join form means
+# moving join conditions into WHERE, a judgement call, so it is reported
+# instead of guessed at. Runs on the POST-fix AST, after A019 has already
+# repaired the unambiguous single-table form.
+
+def l018_update_from_alias(expressions: list) -> list[Warning]:
+    try:
+        from sqlglot import expressions as exp
+    except ImportError:  # pragma: no cover - sqlglot is a hard dependency
+        return []
+
+    out: list[Warning] = []
+    for tree in expressions:
+        if tree is None or isinstance(tree, exp.Command):
+            continue
+        for upd in tree.find_all(exp.Update):
+            target = upd.this
+            frm = upd.args.get("from_") or upd.args.get("from")
+            if not isinstance(target, exp.Table) or frm is None:
+                continue
+            if target.alias or target.args.get("db"):
+                continue
+            aliases = set()
+            if isinstance(frm.this, exp.Table) and frm.this.alias:
+                aliases.add(frm.this.alias.lower())
+            # joins may hang off the Update (older sqlglot) or nest on the
+            # FROM's first table node (sqlglot 30).
+            joins = list(upd.args.get("joins") or [])
+            if isinstance(frm.this, exp.Table):
+                joins.extend(frm.this.args.get("joins") or [])
+            for join in joins:
+                if isinstance(join.this, exp.Table) and join.this.alias:
+                    aliases.add(join.this.alias.lower())
+            if target.name.lower() in aliases:
+                out.append(Warning(
+                    "L018", Severity.ERROR,
+                    f"UPDATE targets the FROM alias "
+                    f"'{target.name}'. PostgreSQL resolves the target before "
+                    f"FROM, so this passes the grammar check and fails at "
+                    f"runtime with 'relation \"{target.name.lower()}\" does "
+                    f"not exist'. Rewrite by hand: name the real table in "
+                    f"UPDATE and move the join conditions into WHERE.",
+                ))
+    return out
+
+
 def apply(result: ConversionResult, original: str,
           expressions: list | None = None) -> ConversionResult:
     """Attach all applicable lint warnings to a result, in place."""
@@ -447,5 +584,7 @@ def apply(result: ConversionResult, original: str,
     result.warnings.extend(lint(original, result.sql))
     if expressions is not None:
         result.warnings.extend(l010_unparsed_ast(expressions))
+        result.warnings.extend(l015_surviving_catalog(expressions))
+        result.warnings.extend(l018_update_from_alias(expressions))
     result.warnings[:] = dedupe(result.warnings)
     return result

@@ -40,15 +40,17 @@ input, exact output and every finding — no need to ask him to re-paste anythin
 
 | Tier | Module | Behaviour |
 |---|---|---|
-| **A001–A009** auto-fix | `core/autofix.py` | Unambiguous defects corrected on the AST. **Every one disclosed as a warning — nothing silent.** |
-| **L001–L014** lint | `core/linter.py` | Reported, never auto-fixed: needs human judgement |
+| **A001–A010** auto-fix | `core/autofix.py` | Unambiguous defects corrected on the AST. **Every one disclosed as a warning — nothing silent.** |
+| **L001–L015** lint | `core/linter.py` | Reported, never auto-fixed: needs human judgement |
 | **validator** | `core/validator.py` | Real PostgreSQL grammar (pglast). INVALID ⇒ result not usable |
 
 Auto-fixes: A001 `TIMESTAMP`→datetime, A002 Windows timezone→IANA, A003
 DD-MM-YYYY→ISO, A004 `VARCHAR(MAX)`→`TEXT`, A005 `CLUSTERED INDEX`→`INDEX`,
 A006 `GETUTCDATE()`→`NOW() AT TIME ZONE 'UTC'`, A007 BIT column vs integer
 comparison→boolean, A008 `BIT` type/`CAST(0 AS BIT)`→`BOOLEAN`/`FALSE`,
-A009 `db.dbo.Table`→`Table`.
+A009 `db.dbo.Table`→`Table`, A010 runtime placeholder
+`[@MasterdbName].[dbo].[T]`→`"@MasterdbName".T` (the substituted value must
+now be a PostgreSQL schema name).
 
 Each has a **refusal case** it deliberately leaves alone — see architecture.md.
 

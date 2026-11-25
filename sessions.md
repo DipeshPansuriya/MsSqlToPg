@@ -1,5 +1,57 @@
 # Sessions — MS-SQL → PostgreSQL Converter
 
+## 2026-10-21 — v2.17.0: TotalRecords statements vs ACS's filterString pager
+
+693 tests. EDINotification Communication Type, Configuration and Data Extraction Config lists returned 500
+on PostgreSQL. `QueryParameterProcessor.GetFilteredRecordsAsync` splits at every line-leading SELECT and
+wraps the piece that mentions TotalRecords; the converted `(SELECT COUNT(*) AS TotalRecords FROM t) AS
+TotalRecords` started its SELECT on a new line, so the subquery was wrapped (42601 near FROM). New
+`core/totalrecords.py`: A059/PC15 whole-table count → `COUNT(*) OVER()`, A060/PC16 nested SELECT kept on
+its `(` line, L032 runs the output through a port of the pager (`infra_wrap`, anchored by a test to the
+exact SQL the API sent) and validates it. The six original T-SQL queries were re-converted and executed on
+PGlite as the pager sends them, with and without a grid filter: all pass. Check-PG dry run on the five
+EDI lists still broken: PC15 fixes each (not written). Quoted aliases and `"Table"` in those queries were
+already handled by A051/A009 since v2.14.0 — they had been converted with an older build. `dist\MsSqlToPg.exe`
+rebuilt on 3.14.
+
+## 2026-10-09 — v2.16.0: measured by executing the Master corpus on PostgreSQL 17
+
+671 tests. Every distinct Master develop query (1,756) was converted and EXECUTED on PGlite against the EF
+model schema, with the verified hand conversions as the control. On the same harness: queries that run
+1,394 → 1,554; fail while the hand version runs 74 → 7; cannot convert 197 → 158. Main changes: A010 drops
+the database placeholder by default; `column_types.txt` + a batch-aware Resolver (`core/typefix.py`, A054)
+reproduce SQL Server's implicit conversions and veto the ^Is… boolean guess for columns declared otherwise;
+A055 SET-target qualifier, A056 WITH RECURSIVE, A057 DISTINCT + ORDER BY, A058 IF/ELSE flattening
+(`core/procedural.py`); A019 outer joins via ctid; A031 dead defaults and `SELECT @v =`. Harness lesson:
+attributing an unqualified column to the first FROM table invented "ambiguous column" failures — model
+tables now get generated columns only from qualified references. `dist\MsSqlToPg.exe` rebuilt on 3.14.
+
+## 2026-10-07 (later) — v2.15.0: SPLIT()
+
+606 tests. `SPLIT(x, ',')` — what earlier conversions left of `dbo.Split` — passed every check and failed at
+runtime (no such function). R001 reports it; A053 (Convert, post-generate: the `CROSS APPLY` form) and PC12
+(Check-PG) rewrite it to a STRING_TO_TABLE derived table keeping `items`, trimming and empty-slice skipping.
+PC12 was then run on the Master API: 16 calls in 14 constants, each validated before writing.
+
+## 2026-10-07 — v2.14.0: brackets, statement separators, unbound parameters
+
+**600 tests passing** (566 before), `dist\MsSqlToPg.exe` rebuilt by `build.bat` on Python 3.14 (16.7 MB).
+Driven by converting the Master API by hand: every defect below was grammar-VALID and failed at runtime.
+
+| Change | Why |
+|---|---|
+| **A051** `[name]` → bare name (Convert/Scan); **PC10** in Check-PG | sqlglot turned brackets into `"Quoted"` names; PostgreSQL matches those case-sensitively against the lower-case schema (`"Master_Tax"`, `"ER"."IsDeleted"` → does not exist). Reserved words → `"order"`. Master develop corpus: 4,386 → 768 quoted identifiers |
+| **PC09** missing `;` between statements (Check-PG) | multi-result `SELECT … SELECT …` constants stayed invalid — Check-PG had no repair (24 Master constants) |
+| **A018 fix** | the inferred `;` was appended after a trailing `--` comment and vanished; the batch was refused |
+| **A023 fix** | `STUFF(…,1,LEN(','),'')` not recognised; a `--` comment in the moved subquery swallowed its `)` |
+| **A052 / PC11 / L030** | `'%@x%'` is never bound by QueryParameterProcessor (only exact `'@x'` is) |
+| engine | a comment after `;` came out as an empty `/* */;` statement — now attached to its statement |
+| Check-PG detection | constants opening with `-- PostgreSQL. Converted …` were never seen (41 → 95 repaired on the pre-fix Master code) |
+
+Verified: old vs new over 1,754 Master develop queries — valid 1,556 → 1,557, clean 1,515 → 1,519, no regression
+(one query now correctly flagged: a develop bug the old output hid in a quoted three-part name). Backup of the
+v2.13.0 source + exe kept outside the project (session scratchpad) — the project is not a git repository.
+
 ## 2026-08-10 — v2.0.0: C# project scan; BIT family + cross-DB auto-fixes
 
 **256 tests passing.** `dist\MsSqlToPg.exe` = 17 MB. Vulture + pyflakes clean.
@@ -22,7 +74,7 @@ refuses. The validator could not see it — it is valid syntax, wrong semantics.
 |---|---|---|
 | A007 | `COALESCE(flag, 0) = 0` → `= FALSE` | 93 predicates (`IsActive`, `IsDeleted`) |
 | A008 | `CAST(0 AS BIT)` → `FALSE`; `BIT` type → `BOOLEAN` | 25 casts |
-| A009 | `qa_northwind_final.dbo.T` → `T`; `dbo.fn()` → `fn()` | all, after "we have single db now" |
+| A009 | `qa_lpms_final.dbo.T` → `T`; `dbo.fn()` → `fn()` | all, after "we have single db now" |
 
 A009 needed two code paths: tables are `exp.Table`, but `dbo.fnGetLocalTime(...)`
 parses as `Dot(Identifier, Anonymous)`. The table fix missed it — it would have

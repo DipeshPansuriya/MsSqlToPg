@@ -36,8 +36,8 @@ rendering. Applies to both conversion and the project scan.
 
 | Tier | Module | Rule |
 |---|---|---|
-| **auto-fix** A001–A009 | `core/autofix.py` | Exactly one defensible answer ⇒ correct it on the AST, **and always disclose it as a warning** |
-| **lint** L001–L014 | `core/linter.py` | Needs a judgement call about the target schema ⇒ report, never rewrite |
+| **auto-fix** A001–A010 | `core/autofix.py` | Exactly one defensible answer ⇒ correct it on the AST, **and always disclose it as a warning** |
+| **lint** L001–L015 | `core/linter.py` | Needs a judgement call about the target schema ⇒ report, never rewrite |
 | **validate** | `core/validator.py` | Real PostgreSQL grammar. INVALID ⇒ `is_usable = False` |
 
 **Every auto-fix has a documented refusal case.** This is what keeps the tier
@@ -49,7 +49,14 @@ honest — if a fix has no case it declines, it is guessing:
 - A007 boolean: only columns *proven* boolean (used with `CAST(0 AS BIT)`) or
   named `^Is[A-Z]`; `COALESCE(Quantity, 0) = 0` is untouched
 - A009 qualifier: only SQL Server's default `dbo` is dropped; a real schema
-  (`reporting.Sales`) is preserved
+  (`reporting.Sales`) is preserved, and a runtime placeholder catalog
+  (`@MasterdbName`) is never stripped — that is A010's job
+- A010 placeholder: `[@MasterdbName].[dbo].[T]` → `"@MasterdbName".T` — the
+  app string-replaces the placeholder at runtime, so it must survive; the
+  substituted value becomes a PostgreSQL SCHEMA name. Refusal: placeholder +
+  real schema (`[@X].[reporting].[T]`) has no two-level mapping — left alone
+  and flagged by L015 (AST-based, because PostgreSQL's grammar ACCEPTS
+  three-part names and only rejects them at runtime)
 
 Auto-fixes are AST rewrites, not text substitution — a column merely NAMED
 `timestamp`, or `'VARCHAR(MAX)'` inside a comment, is never touched.

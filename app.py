@@ -4,6 +4,8 @@ GUI:    python app.py
 File:   python app.py query.sql [--no-insights]
 Stdin:  type query.sql | python app.py --cli
 Scan:   python app.py --scan "E:/Project/MyApp" [--dry-run]
+Audit:  python app.py --audit "E:/Project/MyApp" [--csv out.csv]
+Check:  python app.py --check-pg "E:/Project/MyApp" [--dry-run]
 
 Fully offline. No network calls: conversion is sqlglot, validation is pglast
 (the real PostgreSQL parser). Nothing leaves the machine.
@@ -130,6 +132,70 @@ def run_scan(args: argparse.Namespace) -> int:
     return 0 if report.failed == 0 else 1
 
 
+def run_audit(args: argparse.Namespace) -> int:
+    from core import audit
+    root = Path(args.audit)
+    if not root.is_dir():
+        print(f"Not a directory: {root}", file=sys.stderr)
+        return 2
+    print(f"Auditing {root} for remaining T-SQL (report only)...")
+    report = audit.run(root, recursive=not args.no_recursive)
+    path = audit.write_report(report)
+    if args.csv:
+        audit.write_csv(report, Path(args.csv))
+    live = report.live_tsql
+    print("\n" + "=" * 60)
+    print(f"Files scanned            : {report.files_scanned}")
+    print(f"SQL constants            : {len(report.rows)}")
+    print(f"Still T-SQL (live)       : {len(live)}")
+    print(f"  whole-constant rewrite : {sum(1 for r in live if r.status == 'REWRITE')}")
+    print(f"  mechanical             : {sum(1 for r in live if r.status == 'MECHANICAL')}")
+    print(f"Still T-SQL (dead)       : {len(report.tsql_rows) - len(live)}")
+    for label, count in list(report.marker_counts().items())[:12]:
+        print(f"    {count:>5}  {label}")
+    if path:
+        print(f"Report                   : {path}  (+ tsql-audit.csv)")
+    applog.log_message(f"Audit {root}: {len(live)} live T-SQL constants")
+    return 0
+
+
+def run_check_pg(args: argparse.Namespace) -> int:
+    from core import pgcheck
+    root = Path(args.check_pg)
+    if not root.is_dir():
+        print(f"Not a directory: {root}", file=sys.stderr)
+        return 2
+    mode = ("DRY RUN -- nothing will be written" if args.dry_run
+            else "REPAIRING FILES IN PLACE (.bak backups will be created)")
+    print(f"Checking converted PostgreSQL under {root}")
+    print(f"Mode: {mode}\n")
+
+    def progress(item, index: int, total: int) -> None:
+        if not item.findings and item.status != pgcheck.FAILED:
+            return
+        try:
+            shown = item.path.relative_to(root)
+        except ValueError:
+            shown = item.path
+        print(f"[{index:>4}/{total}] {item.status:<9} {shown}"
+              f"  (fixed {item.fixed}, findings {item.reported}, T-SQL {item.tsql})"
+              + (f" -- {item.error}" if item.error else ""))
+
+    report = pgcheck.run(root, recursive=not args.no_recursive,
+                         dry_run=args.dry_run, on_progress=progress)
+    path = pgcheck.write_report(report)
+    print("\n" + "=" * 60)
+    print(f"Files scanned        : {len(report.files)}")
+    print(f"Statements repaired  : {report.total('fixed')}")
+    print(f"With findings        : {report.total('reported')}")
+    print(f"Still T-SQL          : {report.total('tsql')}")
+    if path:
+        print(f"Report               : {path}")
+    applog.log_message(f"Check-PG {root}: {report.total('fixed')} repaired"
+                       + (" (dry run)" if args.dry_run else ""))
+    return 0 if not any(f.status == pgcheck.FAILED for f in report.files) else 1
+
+
 def stdin_is_piped() -> bool:
     """True when input is being piped in rather than typed.
 
@@ -157,10 +223,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan", metavar="DIR",
                         help="scan a C# project and rewrite MS-SQL literals "
                              "as PostgreSQL, in place (.bak backups made)")
+    parser.add_argument("--audit", metavar="DIR",
+                        help="report every C# SQL constant still holding T-SQL "
+                             "(live/dead, by marker); writes tsql-audit.md/.csv")
+    parser.add_argument("--csv", metavar="FILE",
+                        help="with --audit: also write the CSV to this path")
+    parser.add_argument("--check-pg", metavar="DIR", dest="check_pg",
+                        help="check ALREADY-CONVERTED PostgreSQL in a C# project "
+                             "and repair known defects in place (.bak backups)")
     parser.add_argument("--dry-run", action="store_true",
-                        help="with --scan: report what would change, write nothing")
+                        help="with --scan / --check-pg: report what would change, "
+                             "write nothing")
     parser.add_argument("--no-recursive", action="store_true",
                         help="with --scan: do not descend into subfolders")
+    parser.add_argument("--keep-db-placeholders", action="store_true",
+                        help="keep [@MasterdbName].[dbo].T as a quoted schema "
+                             "\"@MasterdbName\".T (pre-2.16 output) instead of "
+                             "dropping it for a single PostgreSQL database")
     parser.add_argument("--version", action="store_true",
                         help="print version and log location, then exit")
     return parser
@@ -168,6 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.keep_db_placeholders:
+        os.environ["MSSQLTOPG_DB_PLACEHOLDER"] = "schema"
     _safe_stdout()
     folder = applog.configure()
 
@@ -179,6 +260,12 @@ def main() -> int:
 
     if args.scan:
         return run_scan(args)
+
+    if args.audit:
+        return run_audit(args)
+
+    if args.check_pg:
+        return run_check_pg(args)
 
     if args.file or args.cli or stdin_is_piped():
         return run_cli(args)

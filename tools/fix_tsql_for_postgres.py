@@ -93,6 +93,18 @@ FIXES: list[Fix] = [
         "as the month. ISO format is unambiguous.",
         r"'(\d{2})-(\d{2})-(\d{4})(\s+[\d:]+)?'", r"'\3-\2-\1\4'",
     ),
+    Fix(
+        "F009-try-cast",
+        "PostgreSQL has no TRY_CAST. CAST is the drop-in -- but it RAISES on "
+        "bad input where TRY_CAST returned NULL; verify the data is castable.",
+        r"\bTRY_CAST\s*\(", "CAST(",
+    ),
+    Fix(
+        "F010-update-set-same-line",
+        "ACS's runtime splitter treats a line-leading SET as a new statement "
+        "and appends ';', causing 42601. UPDATE and SET must share a line.",
+        r"(?im)^([ \t]*UPDATE\b[^\n;]*?)[ \t]*\n[ \t]*(?=SET\b)", r"\1 ",
+    ),
 ]
 
 # Reported but never auto-rewritten: the correct target depends on how the
@@ -100,7 +112,7 @@ FIXES: list[Fix] = [
 MANUAL: list[Fix] = [
     Fix(
         "M001-cross-database",
-        "PostgreSQL cannot query across databases. 'qa_northwind_final.dbo.Table' "
+        "PostgreSQL cannot query across databases. 'qa_lpms_final.dbo.Table' "
         "must become 'schema.Table' inside ONE database -- decide the schema "
         "and rewrite, or create a foreign-data wrapper.",
         r"\b\w+\.(?:dbo|\[dbo\])\.\[?\w+\]?", "", manual=True,
@@ -116,6 +128,19 @@ MANUAL: list[Fix] = [
         "Columns still declared BIT need reviewing: BIT in PostgreSQL is a "
         "bit-string type, not a boolean.",
         r"(?<![\w.])BIT\b(?!\s*(?:VARYING|\())", "", manual=True,
+    ),
+    Fix(
+        "M004-insert-returning-split",
+        "RETURNING is cut off from its INSERT by ';' -- PostgreSQL raises "
+        "42601. Remove the semicolon (watch for C# callers that append "
+        "' RETURNING x;' to a base query already ending in ';').",
+        r";\s*RETURNING\b", "", manual=True,
+    ),
+    Fix(
+        "M005-quoted-identifiers",
+        "Double-quoted identifiers are correct SQL, but inside a C# verbatim "
+        '@"..." string each " must be doubled ("" ) or the literal ends early.',
+        r'"[A-Za-z_@][\w .]*"', "", manual=True,
     ),
 ]
 

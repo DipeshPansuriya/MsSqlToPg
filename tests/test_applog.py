@@ -47,7 +47,11 @@ def test_version_is_in_the_title():
 def test_banner_names_the_rule_set():
     """A log excerpt must identify which rules were in force."""
     assert VERSION in banner()
-    assert "L001-L014" in banner()
+    assert "L001-L032" in banner()
+    assert "A001-A061" in banner()
+    assert "R001-R008" in banner()
+    assert "PC01-PC16" in banner()
+    assert "LB001-LB010" in banner()
 
 
 # --------------------------------------------------------------------------
@@ -72,7 +76,9 @@ def test_conversion_is_logged_with_verdict_and_timing(log_dir):
 
 def test_every_warning_reaches_the_log_with_its_line(log_dir):
     """Warning codes AND line numbers -- without them the log cannot diagnose."""
-    source = "SELECT a + ' - ' + b FROM t WHERE c = @@IDENTITY"
+    # The string+numeric literal mix is A011's refusal case, so the `+` chain
+    # survives conversion and L001 still reports it (A011 fixes the rest).
+    source = "SELECT a + ' - ' + 0 FROM t WHERE c = @@IDENTITY"
     result = orchestrator.convert(source)
     applog.log_conversion(source, result, "defects.sql")
 
