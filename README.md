@@ -1,11 +1,28 @@
 # MS-SQL → PostgreSQL Converter
 
+[![GitHub release](https://img.shields.io/github/release/DipeshPansuriya/MsSqlToPg.svg?label=latest)](https://github.com/DipeshPansuriya/MsSqlToPg/releases/latest)
+[![GitHub tag](https://img.shields.io/github/tag/DipeshPansuriya/MsSqlToPg.svg)](https://github.com/DipeshPansuriya/MsSqlToPg/tags)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
+[![Platform: Windows](https://img.shields.io/badge/platform-windows-lightgrey)](https://github.com/DipeshPansuriya/MsSqlToPg/releases)
+
 Desktop utility that converts T-SQL to PostgreSQL, validates the result against
 the **real PostgreSQL grammar**, and reports what changed and what still needs
 attention.
 
 **Fully offline.** No network calls, no API keys, no query text ever leaves the
 machine. Safe to hand to anyone.
+
+## Latest release — v2.18.1
+
+Download the self-contained Windows executable from the
+[releases page](https://github.com/DipeshPansuriya/MsSqlToPg/releases):
+
+- **`MsSqlToPg.exe`** — ~17 MB, one file, no Python or prerequisites needed
+- `boolean_columns.txt` / `column_types.txt` — optional schema hint files shipped beside the exe
+- `boolean_columns_query.sql` / `column_types_query.sql` — read-only queries to regenerate those files
+
+See the [changelog](#changelog) below for what changed in each version.
 
 ## Quick start
 
@@ -421,4 +438,34 @@ widgets; the linter and validator are pure text-in / findings-out.
 ## Rule book
 
 Every auto-fix (A001-A061), lint rule (L001-L032), resolvability rule (R001-R008), converted-PG repair (PC01-PC16) and hand rule (R-CHAT-*) is documented in [CONVERSION_RULES.md](CONVERSION_RULES.md). Update it in the same change as any new rule.
+
+## Changelog
+
+### v2.18.1 — 2026-11-17
+- **A007** — a quoted `'0'`/`'1'` compared with a boolean column (by schema list, `Is...` name or `CAST(.. AS BIT)` proof) now converts to `FALSE`/`TRUE` instead of `... = '0'`. A string assigned in `SET` is left alone.
+
+### v2.18.0 — 2026-11-05
+- **A061** — a Dapper parameter compared with a typed column is cast to that type (`Owner_OrgId = CAST(... AS BIGINT)`).
+- Scan / Check-PG now pick up literals that open with `IF (...)`, `if('@x' = ...)`, `BEGIN ... END`, or a `--` comment in front of T-SQL.
+
+### v2.14.0 — 2026-10-07
+- **[brackets]** (PC10): `[Master_Tax]` now comes out bare instead of `"Master_Tax"` (quoted names are case-sensitive in PostgreSQL).
+- **`;` between statements** (PC09): Check-PG adds the missing terminator.
+- **`'%@search%'`** (PC11) becomes `'%' || @search || '%'`.
+- **PC12**: `SPLIT(x, ',')` rewritten to a `STRING_TO_TABLE` derived table.
+
+### v2.13.0 — Audit / Check converted PG
+- **Audit** lists every SQL constant that still holds T-SQL.
+- **Check-PG** repairs already-converted PostgreSQL (PC01–PC08): `fnGetLocalTime`, `NUMBER_TO_STR`, welded `ON`, booleans vs 0/1, fabricated names, `YEAR()/MONTH()/DAY()`, temp-table guards, `DDTHH` masks, `WITH ROLLUP`.
+
+### Earlier
+- **v2.16.0** — column types (`column_types.txt`), database placeholders (`[@MasterdbName]`), IF/ELSE flattening (A058).
+- **v2.17.0** — TotalRecords window count (A059).
+- **v2.0.0** — Initial release: query conversion, C# project scan, three-tier correction (auto-fix / lint / validate), Query Insights.
+
+Full rule details live in [CONVERSION_RULES.md](CONVERSION_RULES.md).
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Dipesh Pansuriya.
 
