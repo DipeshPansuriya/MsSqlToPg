@@ -49,7 +49,7 @@ DD-MM-YYYY→ISO, A004 `VARCHAR(MAX)`→`TEXT`, A005 `CLUSTERED INDEX`→`INDEX`
 A006 `GETUTCDATE()`→`NOW() AT TIME ZONE 'UTC'`, A007 BIT column vs integer
 comparison→boolean, A008 `BIT` type/`CAST(0 AS BIT)`→`BOOLEAN`/`FALSE`,
 A009 `db.dbo.Table`→`Table`, A010 runtime placeholder
-`[@MasterdbName].[dbo].[T]`→`"@MasterdbName".T` (the substituted value must
+`[@AppDbName].[dbo].[T]`→`"@AppDbName".T` (the substituted value must
 now be a PostgreSQL schema name).
 
 Each has a **refusal case** it deliberately leaves alone — see architecture.md.

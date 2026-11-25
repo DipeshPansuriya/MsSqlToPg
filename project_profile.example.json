@@ -1,0 +1,6 @@
+{
+  "literal_safe_parameters": ["AppDbName", "UserId"],
+  "prefix_replaced_parameters": ["@AppDbName", "@UserId"],
+  "boolean_columns": ["DefaultFlag", "AllowSwitch"],
+  "local_time_functions": ["fnToLocalTime"]
+}

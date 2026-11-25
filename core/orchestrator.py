@@ -42,7 +42,7 @@ _TABLE_HINT_RE = __import__("re").compile(
     __import__("re").IGNORECASE)
 
 
-# A016 -- every shape the ACS splitter (PostgreSQLUtility.SplitStatements) can
+# A016 -- every shape a keyword-based runtime statement splitter can
 # tear. It cuts at ANY line whose first token is one of
 # SELECT/INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/IF/SET/DECLARE and appends
 # "\n ;" to the piece before it, so a statement whose CONTINUATION begins such
@@ -190,8 +190,8 @@ def convert(sql: str) -> ConversionResult:
         result.add(
             "L020", Severity.WARNING,
             f"Parameter name(s) mentioned inside a `--` comment: {names}. "
-            f"ACS's QueryParameterProcessor.ReplaceQueryParameters is a raw "
-            f"text substitution and strips the quotes from the '@Param' form "
+            f"A query pre-processor that substitutes parameters as raw "
+            f"text strips the quotes from the '@Param' form "
             f"wherever it appears, comments included. Npgsql skips comments so "
             f"a BOUND name survives, but an UNBOUND one is a live hazard -- "
             f"write the name without the '@'.")
@@ -211,7 +211,7 @@ def convert(sql: str) -> ConversionResult:
             result.add(fix.code, Severity.WARNING, f"AUTO-CORRECTED: {fix.note}")
 
         # A054 (v2.16.0): SQL Server's silent conversions (int = text, LIKE on a
-        # number, '' as 0 / 1900-01-01, text into fnGetLocalTime) made explicit
+        # number, '' as 0 / 1900-01-01, text into a local-time function) made explicit
         # from column_types.txt. Surgical text edits; untouched text is kept.
         result.sql, typed = typefix.apply(result.sql)
         if typed:
@@ -223,7 +223,7 @@ def convert(sql: str) -> ConversionResult:
                 f"a text side compared with a number is CAST to that number "
                 f"(NULLIF(TRIM(x), '')), a number literal against a text column "
                 f"is quoted, LIKE on a number/date compares its text, '' means "
-                f"0 / 1900-01-01, text passed to fnGetLocalTime/TO_CHAR is CAST "
+                f"0 / 1900-01-01, text passed to TO_CHAR or a local-time function is CAST "
                 f"to TIMESTAMP. PostgreSQL raises 42883/22P02 on the original.")
 
         # A061 (v2.18.0): a Dapper parameter compared with a typed column is cast to that type --
@@ -244,7 +244,7 @@ def convert(sql: str) -> ConversionResult:
     result.warnings.extend(ctx.warnings)
 
     if result.ok and result.sql.strip():
-        # A016: ACS's runtime splitter (PostgreSQLUtility.SplitStatements) is
+        # A016: a runtime statement splitter that cuts on keywords is
         # not statement-aware -- a line-leading SET is treated as a NEW
         # statement and terminated with ';', producing 42601 near ';'. Keep
         # UPDATE and SET on one line so the splitter cannot cut between them.
@@ -262,11 +262,11 @@ def convert(sql: str) -> ConversionResult:
                 "A016", Severity.INFO,
                 f"{glue_count} statement continuation(s) re-joined onto one "
                 f"line (UPDATE/SET, INSERT INTO(cols)/SELECT, CREATE TABLE "
-                f"AS/SELECT, CTE close/SELECT). The ACS statement splitter "
+                f"AS/SELECT, CTE close/SELECT). A keyword-based statement splitter "
                 f"treats a line-leading keyword as a new statement and "
                 f"appends ';' to the piece before it, tearing the statement "
                 f"in half and raising 42601.")
-        # A059 / A060: the same splitter feeds ACS's filterString pager, which
+        # A059 / A060: such a splitter can feed a filterString pager, which
         # wraps the piece that mentions TotalRecords -- and the pretty printer
         # starts every subquery's SELECT on a new line (core/totalrecords).
         result.sql, windowed = totalrecords.window_counts(result.sql)
@@ -276,8 +276,8 @@ def convert(sql: str) -> ConversionResult:
                 "A059", Severity.WARNING,
                 f"AUTO-CORRECTED: {windowed} `(SELECT COUNT(*) FROM t) AS "
                 f"TotalRecords` subquery(ies) over the statement's own table "
-                f"rewritten to `COUNT(*) OVER() AS TotalRecords`. ACS's filterString "
-                f"pager cuts at every line-leading SELECT and wraps the piece that "
+                f"rewritten to `COUNT(*) OVER() AS TotalRecords`. A filterString "
+                f"pager that cuts at every line-leading SELECT wraps the piece that "
                 f"mentions TotalRecords; the subquery's SELECT started its own "
                 f"line, so the pager wrapped the subquery and PostgreSQL raised "
                 f"42601 near FROM. Same value on every row (the statement reads "
@@ -287,7 +287,7 @@ def convert(sql: str) -> ConversionResult:
             result.add(
                 "A060", Severity.INFO,
                 f"{glued} nested SELECT(s) in a TotalRecords/TotalCount statement "
-                f"kept on the line of their '(' -- ACS's filterString pager cuts "
+                f"kept on the line of their '(' -- a filterString pager that cuts "
                 f"at a line-leading SELECT and would wrap the subquery instead of "
                 f"the statement.")
         # No extra whitespace may be introduced by conversion: collapse

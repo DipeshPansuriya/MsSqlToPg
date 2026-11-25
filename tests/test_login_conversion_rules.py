@@ -1,4 +1,4 @@
-"""Rules from the Community Login PG conversion (TOOL_UPDATE.md, 2026-08-12).
+"""Rules from a real conversion run (2026-08-12).
 
 Spec codes were renumbered to avoid collisions with 2026-08-11 fixes:
 spec-A011 -> A015 (TRY_CAST), spec-A012 -> A014 (boolean ''),
@@ -18,9 +18,9 @@ def codes(result):
 
 # ------------------------------------------------------------- A007 expansion
 
-def test_defaultbranch_allowlisted_as_boolean():
+def test_defaultsite_allowlisted_as_boolean():
     result = convert(
-        "SELECT 1 FROM UserBranch UB WHERE ISNULL(UB.DefaultBranch, 0) = 1")
+        "SELECT 1 FROM UserSite UB WHERE ISNULL(UB.DefaultSite, 0) = 1")
     assert "A007" in codes(result)
     low = result.sql.upper()
     assert "TRUE" in low and "= 1" not in low
@@ -28,7 +28,7 @@ def test_defaultbranch_allowlisted_as_boolean():
 
 def test_boolean_string_compare_true_false():
     result = convert(
-        "SELECT 1 FROM Cfg WHERE ISNULL(IsWorkflowSend, 'false') = 'false'")
+        "SELECT 1 FROM Cfg WHERE ISNULL(IsFlowSent, 'false') = 'false'")
     assert "A007" in codes(result)
     assert "'false'" not in result.sql.lower()
     assert "FALSE" in result.sql.upper()

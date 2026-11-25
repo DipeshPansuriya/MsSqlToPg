@@ -262,13 +262,8 @@ def fix_unsupported_builtins(expressions: list, original: str) -> Applied | None
 # capital) -- the old ^is[A-Z_] pattern missed Is2FA.
 _BOOLEAN_NAME = re.compile(r"^is[A-Za-z0-9_]", re.IGNORECASE)
 
-# Flag columns that are boolean in the ACS PostgreSQL schema but do not follow
-# the Is* naming convention. Confirmed against the Login conversion
-# (2026-08-11): DefaultBranch was missed and failed at runtime.
-_KNOWN_BOOLEAN_COLUMNS = {
-    "defaultbranch", "rightsswitchrole", "switchrole", "multiauthentication",
-    "bundleavailable", "isprimarystakeholder",
-}
+# Flag columns that are boolean in the target schema but do not follow the Is*
+# naming convention come from the project profile ("boolean_columns").
 
 
 def _boolean_columns(original: str) -> set[str]:
@@ -288,20 +283,20 @@ def _boolean_columns(original: str) -> set[str]:
 
 def _is_boolean_column(name: str, proven: set[str]) -> bool:
     # A024 (v2.13.0): the target schema's own list, when boolean_columns.txt
-    # is present -- names like GATEINSTATUS / HasAirlineAccepted follow no
+    # is present -- names like ACTIVESTATUS / HasAccepted follow no
     # naming convention and were the ones that survived conversion.
-    from core import schema_hints
+    from core import profile, schema_hints
     lowered = name.lower()
-    return (lowered in proven or lowered in _KNOWN_BOOLEAN_COLUMNS
+    return (lowered in proven or lowered in profile.current().boolean_columns
             or lowered in schema_hints.boolean_columns()
             or bool(_BOOLEAN_NAME.match(name)))
 
 
 def _type_resolver(expressions):
     """v2.16.0: column types from column_types.txt and the batch's own temp tables / CTEs
-    (core/typefix.Resolver), so a ^Is... column DECLARED as something else -- `IsRefundExpire
-    VARCHAR(10)` in a #temp, `CASE ... THEN 1 ELSE 0 END AS IsOceanConfig INTO #OceanFlag`,
-    Master_ISOCode.ISOId INT -- is not rewritten as a boolean. None when it cannot be built."""
+    (core/typefix.Resolver), so a ^Is... column DECLARED as something else -- `IsOfferExpire
+    VARCHAR(10)` in a #temp, `CASE ... THEN 1 ELSE 0 END AS IsRemoteConfig INTO #RemoteFlag`,
+    Ref_Unit.IsoId INT -- is not rewritten as a boolean. None when it cannot be built."""
     from core import typefix
     try:
         return typefix.Resolver([t for t in expressions if t is not None])
@@ -431,8 +426,8 @@ def fix_bit_integer_comparison(expressions: list, original: str) -> Applied | No
 # boolean and integer cannot be matched' (42804) -- valid grammar, so the
 # validator never sees it. And even without the COALESCE, PostgreSQL casts a
 # boolean to 'true'/'false' where T-SQL CONVERT produced '1'/'0' -- silently
-# breaking every UI check for == '1'. Found 721 instances in DropdownQueryMap
-# ALONE, in queries that had already passed conversion.
+# breaking every UI check for == '1'. Found hundreds of instances in a single
+# query map, in queries that had already passed conversion.
 #
 # Two rewrites, same column evidence as A007 (disclosed, verify the schema):
 #   1. COALESCE(IsX, 0/1/'0'/'1') anywhere      -> COALESCE(IsX, FALSE/TRUE)
@@ -579,7 +574,7 @@ def fix_bit_type(expressions: list, original: str) -> Applied | None:
 # --------------------------------------------------------------------------
 # PostgreSQL has no cross-database queries, and `dbo` is SQL Server's default
 # schema with no PostgreSQL counterpart. Once everything lives in ONE database,
-# `qa_lpms_final.dbo.Inv_Invoice` should simply be `Inv_Invoice`, resolved via
+# `qa_app_final.dbo.Fin_Bill` should simply be `Fin_Bill`, resolved via
 # search_path.
 #
 # DELIBERATELY NARROW: only the SQL Server default schema `dbo` is stripped. A
@@ -589,7 +584,7 @@ def fix_bit_type(expressions: list, original: str) -> Applied | None:
 def fix_cross_database_qualifier(expressions: list, original: str) -> Applied | None:
     stripped: set[str] = set()
     for tree in expressions:
-        # `dbo.fnGetLocalTime(...)` parses as Dot(Identifier(dbo), Anonymous).
+        # `dbo.fnToLocalTime(...)` parses as Dot(Identifier(dbo), Anonymous).
         # PostgreSQL has no dbo schema, so the call fails with
         # "schema dbo does not exist" -- unwrap it to a bare function call.
         for dot in list(tree.find_all(exp.Dot)):
@@ -601,7 +596,7 @@ def fix_cross_database_qualifier(expressions: list, original: str) -> Applied | 
                 dot.replace(dot.expression)
 
         for table in tree.find_all(exp.Table):
-            # Runtime placeholders (@MasterdbName.dbo.T) are A010's concern.
+            # Runtime placeholders (@AppDbName.dbo.T) are A010's concern.
             # Dropping one silently repoints the query at the current
             # database -- never strip them here, whatever the schema part.
             if (placeholder_name(table.args.get("catalog"))
@@ -632,19 +627,19 @@ def fix_cross_database_qualifier(expressions: list, original: str) -> Applied | 
 
 
 # --------------------------------------------------------------------------
-# A010 -- runtime database-name placeholders (@MasterdbName.dbo.Table)
+# A010 -- runtime database-name placeholders (@AppDbName.dbo.Table)
 # --------------------------------------------------------------------------
 # Some codebases substitute database names into the query TEXT at runtime:
-#     FROM [@MasterdbName].[dbo].[Master_Airport]
-# where the application string-replaces @MasterdbName with a real database
+#     FROM [@AppDbName].[dbo].[Ref_Region]
+# where the application string-replaces @AppDbName with a real database
 # name before executing. The placeholder is load-bearing: dropping it (what
 # A009 would do) silently repoints the query at the CURRENT database, where
 # the table does not exist.
 #
 # PostgreSQL cannot query across databases at all, so the placeholder is kept
 # as a QUOTED SCHEMA qualifier instead:
-#     FROM "@MasterdbName".Master_Airport
-# "@MasterdbName" is a legal quoted identifier, so grammar validation passes,
+#     FROM "@AppDbName".Ref_Region
+# "@AppDbName" is a legal quoted identifier, so grammar validation passes,
 # and the runtime substitution keeps working -- the substituted value must
 # now be the PostgreSQL SCHEMA holding those tables (exact case: it lands
 # inside double quotes), whether that schema is native or a postgres_fdw
@@ -662,8 +657,8 @@ _PLACEHOLDER = re.compile(r"^@\w+$")
 def placeholder_name(node) -> str | None:
     """`@Name` in an identifier position, in either shape sqlglot produces.
 
-    Bracketed `[@MasterdbName]` parses as Identifier('@MasterdbName');
-    unbracketed `@MasterdbName` parses as Parameter(Var('MasterdbName')).
+    Bracketed `[@AppDbName]` parses as Identifier('@AppDbName');
+    unbracketed `@AppDbName` parses as Parameter(Var('AppDbName')).
     Returns the canonical `@Name` text, or None if `node` is neither.
     """
     if isinstance(node, exp.Parameter):
@@ -719,7 +714,7 @@ def fix_placeholder_database_qualifier(expressions: list,
                 converted.add(cat_ph)
                 continue
 
-            # Two-part form @DBName.Table: already in schema position. A
+            # Two-part form @DbName.Table: already in schema position. A
             # Parameter or unquoted @name renders bare -- invalid PostgreSQL.
             # Normalize to a quoted identifier either way; the disclosure
             # (substitute a SCHEMA now, not a database) applies regardless.
@@ -1024,7 +1019,7 @@ def fix_try_cast(expressions: list, original: str) -> Applied | None:
 # --------------------------------------------------------------------------
 # A021 -- numeric CAST of a Dapper parameter must tolerate ''
 # --------------------------------------------------------------------------
-# The ACS guard idiom is `@SelectedVal = '' OR Id = TRY_CAST(@SelectedVal AS
+# A common guard idiom is `@SelectedVal = '' OR Id = TRY_CAST(@SelectedVal AS
 # INT)`. T-SQL is forgiving twice over: TRY_CAST('' ) is NULL, and even plain
 # CAST('' AS INT) is 0. PostgreSQL is neither -- CAST('' AS INT) raises 22P02,
 # and because the planner constant-folds casts of bound parameter values, the
@@ -1077,7 +1072,7 @@ def fix_param_numeric_cast(expressions: list, original: str) -> Applied | None:
 
 
 # --------------------------------------------------------------------------
-# A022 -- ACS `dbo.Split(x, sep)` table function
+# A022 -- user-defined `dbo.Split(x, sep)` table function
 # --------------------------------------------------------------------------
 # The MSSQL databases carry a user-defined `dbo.Split` returning a table with
 # an `items` column (`SELECT CAST(items AS INT) FROM dbo.Split(@Ids, ','))`).
@@ -1656,7 +1651,7 @@ def _match_paren(text: str, i: int) -> int:
 _STUFF_RE = re.compile(r"(?i)\bSTUFF\s*\(")
 _FOR_XML_TAIL_RE = re.compile(r"(?is)\s*FOR\s+XML\s+PATH\s*\(\s*''\s*\)\s*$")
 # The length argument is a number -- or LEN(','), whose quoted comma a plain
-# `[^,]+` refused (v2.14.0, Getmasterproducttypesearch).
+# `[^,]+` refused (v2.14.0, Getproducttypesearch).
 _STUFF_ARGS_RE = re.compile(
     r"(?is)^\s*\((.*)\)\s*,\s*1\s*,\s*(?:LEN\s*\(\s*N?'[^']*'\s*\)|[^,]+?)\s*,\s*''\s*$")
 _SEP_FIRST_RE = re.compile(
@@ -1779,8 +1774,7 @@ _COMMENT_PARAM_RE = re.compile(r"(?m)--[^\n]*?(@\w+)")
 def find_params_in_comments(sql: str) -> list:
     """L020 evidence -- parameter names mentioned inside `--` comments.
 
-    ACS's QueryParameterProcessor.ReplaceQueryParameters is a raw text
-    substitution: it strips the quotes from the `'@Param'` form wherever it
+    A query pre-processor that substitutes parameters as raw text strips the quotes from the `'@Param'` form wherever it
     appears, comments included. Npgsql's parser does skip comments, so a
     BOUND name survives -- but an UNBOUND one left in prose is a live hazard.
     Write the name without the `@`.

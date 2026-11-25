@@ -1,6 +1,6 @@
 """A023 FOR XML PATH -> STRING_AGG, A016 splitter glue, L019/L020 findings.
 
-Every case here comes from a real ACS query hand-converted on 2026-08-21 that
+Every case here is modelled on a query hand-converted on 2026-08-21 that
 the tool could not do on its own.
 """
 from core.autofix import (
@@ -24,13 +24,13 @@ def test_for_xml_idiom_becomes_string_agg():
 
 
 def test_for_xml_distinct_and_order_by_are_carried_into_the_aggregate():
-    # GetAutoAssociateData_Query.cs -- the SHCList column.
-    sql = ("SELECT COALESCE(STUFF((select distinct ', ' + CONVERT(TEXT,SHC.SHCId) "
-           "FROM SISHCDetail SHC WHERE SHC.SIShipmentId = D.Id ORDER BY SHC.SHCId "
-           "for xml path('')),1,1,''),'ALL') AS SHCList FROM D;")
+    # a DISTINCT tag list column, ordered inside the aggregate.
+    sql = ("SELECT COALESCE(STUFF((select distinct ', ' + CONVERT(TEXT,TAG.TagId) "
+           "FROM OrderTagDetail TAG WHERE TAG.OrderLineId = D.Id ORDER BY TAG.TagId "
+           "for xml path('')),1,1,''),'ALL') AS TagList FROM D;")
     out, count = rewrite_for_xml_path(sql)
     assert count == 1
-    assert "STRING_AGG(DISTINCT CONVERT(TEXT,SHC.SHCId), ', ' ORDER BY SHC.SHCId)" in out
+    assert "STRING_AGG(DISTINCT CONVERT(TEXT,TAG.TagId), ', ' ORDER BY TAG.TagId)" in out
     # the COALESCE(..., 'ALL') fallback must survive untouched
     assert "'ALL'" in out
 
@@ -80,8 +80,8 @@ def test_for_json_is_detected_and_not_guessed():
 # -- L020 ------------------------------------------------------------------
 
 def test_parameter_named_inside_a_comment_is_reported():
-    sql = "-- MasterdbName prefix dropped, was @MasterdbName\nSELECT 1;"
-    assert find_params_in_comments(sql) == ["@MasterdbName"]
+    sql = "-- AppDbName prefix dropped, was @AppDbName\nSELECT 1;"
+    assert find_params_in_comments(sql) == ["@AppDbName"]
 
 
 def test_parameter_outside_a_comment_is_not_reported():
@@ -91,7 +91,7 @@ def test_parameter_outside_a_comment_is_not_reported():
 # -- A016 ------------------------------------------------------------------
 
 def _no_line_starts_a_split_keyword_mid_statement(sql: str) -> bool:
-    """The ACS splitter cuts at a line-leading keyword and appends ' ;'."""
+    """A keyword-based splitter cuts at a line-leading keyword and appends ' ;'."""
     import re
     return not re.search(
         r"(?im)^[ \t]*(?:UPDATE\b[^\n;]*|INSERT\s+INTO\s+\w+\s*\([^()]*\)|"

@@ -1,1 +1,1 @@
-SELECT QUOTENAME(TableName) AS q FROM Master_Tables
+SELECT QUOTENAME(TableName) AS q FROM Ref_Tables

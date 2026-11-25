@@ -1,10 +1,10 @@
 """Schema knowledge the converter cannot infer from the query text (A024).
 
 A007/A014/A020 decide "is this column boolean?" from evidence inside the query:
-a CAST(0/1 AS BIT) proof, the ^Is... naming convention, or a short allowlist.
-That missed real flags -- `GATEINSTATUS`, `IsConsoleShipment`-style names with
-a different prefix, `HasAirlineAccepted` -- and 938 `COALESCE(flag, 0)` /
-`flag = 1` sites survived conversion on Import alone. Both PARSE and both fail
+a CAST(0/1 AS BIT) proof, the ^Is... naming convention, or a profile allowlist.
+That missed real flags -- `ACTIVESTATUS`, flag names with a prefix other than
+Is, such as `HasAccepted` -- and 938 `COALESCE(flag, 0)` /
+`flag = 1` sites survived conversion in one module alone. Both PARSE and both fail
 at runtime (42804 / 42883), so no grammar check can see them.
 
 The fix is the target schema itself: a plain-text list of the column names that
@@ -27,6 +27,8 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+
+from core import profile
 
 FILE_NAME = "boolean_columns.txt"
 ENV_VAR = "MSSQLTOPG_BOOLEAN_COLUMNS"
@@ -86,6 +88,7 @@ def source() -> str | None:
 def reset() -> None:
     """Forget the cached lists (tests, or after the files are edited)."""
     global _cache, _types_cache
+    profile.reset()
     _cache = None
     _types_cache = None
 
@@ -180,11 +183,11 @@ def types_source() -> str | None:
 
 
 def db_placeholder_policy() -> str:
-    """How A010 treats `[@MasterdbName].[dbo].T`-style runtime placeholders.
+    """How A010 treats `[@AppDbName].[dbo].T`-style runtime placeholders.
 
     "drop"   (default, v2.16.0) -- one PostgreSQL database: the prefix is removed
              and the table is reached unqualified, like A009 does for `db.dbo.`.
-    "schema" -- keep it as a quoted schema `"@MasterdbName".T` for a target where
+    "schema" -- keep it as a quoted schema `"@AppDbName".T` for a target where
              the substituted value names a PostgreSQL schema (pre-v2.16.0 output).
     """
     value = (os.environ.get(PLACEHOLDER_ENV_VAR) or "drop").strip().lower()

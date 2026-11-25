@@ -34,7 +34,7 @@ No test makes a live network call. `test_no_network_call_is_made` monkeypatches
 - Auto-fixes: `A001`–`Annn`, one function each, registered in `ALL_FIXES`
 - Linter rules: `L001`–`Lnnn`, one function each, registered in `ALL_RULES`
 - Fixtures named after the construct under test, e.g. `dashboard_bit_flags.sql`
-- Regression fixtures are **distilled from real production queries**, not invented
+- Regression fixtures are **modelled on real-world query shapes**
 
 ## Layout
 ```
@@ -45,7 +45,7 @@ E:\Project\MsSqlToPg\
 │             insights, csharp, scan, applog, version
 ├── engines/  sqlglot_engine.py
 ├── ui/       main_window.py (Notebook: ConvertTab + ScanTab), sql_text.py
-└── tests/    + fixtures/ (+ fixtures/csharp/)
+└── tests/    + fixtures/
 ```
 
 ## Build
@@ -75,5 +75,5 @@ Bash heredocs mangle Python containing backticks, `\n`, or `$`. Backticks get
 executed by the shell; `\\n` collapses. **Use the Write/Edit tools for any file
 content with escapes or markdown backticks** — not `python - <<'EOF'`.
 
-- **Rule book sync:** any change that adds or alters a conversion rule MUST update CONVERSION_RULES.md (and TOOL_UPDATE.md status if applicable) in the same commit. Bump core/version.py MINOR for new rules.
+- **Rule book sync:** any change that adds or alters a conversion rule MUST update CONVERSION_RULES.md in the same commit. Bump core/version.py MINOR for new rules.
 

@@ -1,9 +1,9 @@
 """v2.17.0: A059 / A060 / L032 and their converted-code twins PC15 / PC16.
 
 A statement that returns a TotalRecords / TotalCount column is rewritten at run
-time by ACS's filterString pager (QueryParameterProcessor.GetFilteredRecordsAsync):
+time by a filterString pager:
 it cuts the batch at every line-leading SELECT and wraps the piece that mentions
-TotalRecords. Every case comes from EDINotification (2026-10-21), where three
+TotalRecords. Every case comes from a grid-paging incident (2026-10-21), where three
 list screens returned 500 on PostgreSQL because the converted count subquery put
 its SELECT on its own line and the pager wrapped the subquery.
 """
@@ -18,34 +18,34 @@ from core import orchestrator, pgcheck, totalrecords, validator
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-COMMUNICATION_TYPE = """\
-SELECT EDI_CommunicationType_Id, Code, Description, IsActive,
-       CASE WHEN ISNULL(IsActive, 'false') = 'true' THEN 'YES' ELSE 'NO' END AS IsActiveDesc
-INTO #CommunicationType
-FROM EDI_CommunicationType WITH(NOLOCK)
+CATEGORY_LIST = """\
+SELECT CategoryId, Code, Description, IsActive,
+       CASE WHEN ISNULL(IsActive, 'false') = 'true' THEN 'YES' ELSE 'NO' END AS ActiveLabel
+INTO #CategoryList
+FROM Category WITH(NOLOCK)
 WHERE ISNULL(IsDeleted, 'false') = 'false'
-  AND OrgProdId = @OrgProdId
+  AND TenantId = @TenantId
 ORDER BY 1 DESC;
 
-SELECT *, (SELECT COUNT(*) AS TotalRecords FROM #CommunicationType) AS TotalRecords
-FROM #CommunicationType
-ORDER BY EDI_CommunicationType_Id DESC;
+SELECT *, (SELECT COUNT(*) AS TotalRecords FROM #CategoryList) AS TotalRecords
+FROM #CategoryList
+ORDER BY CategoryId DESC;
 
-DROP TABLE #CommunicationType;
+DROP TABLE #CategoryList;
 """
 
-# What the Aug 2026 conversion left in EDICommunicationTypeQueries.cs.
-CONVERTED_COMMUNICATION_TYPE = """
+# What an earlier converter version produced for it.
+CONVERTED_CATEGORY_LIST = """
             SELECT
-              EDI_CommunicationType_Id,
+              CategoryId,
               Code,
               Description,
               IsActive,
-              CASE WHEN COALESCE(IsActive, FALSE) = TRUE THEN 'YES' ELSE 'NO' END AS IsActiveDesc
-            INTO TEMPORARY CommunicationType
-            FROM EDI_CommunicationType
+              CASE WHEN COALESCE(IsActive, FALSE) = TRUE THEN 'YES' ELSE 'NO' END AS ActiveLabel
+            INTO TEMPORARY CategoryList
+            FROM Category
             WHERE
-              COALESCE(IsDeleted, FALSE) = FALSE AND OrgProdId = 3223
+              COALESCE(IsDeleted, FALSE) = FALSE AND TenantId = 42
             ORDER BY
               1 DESC NULLS LAST;
 
@@ -54,25 +54,25 @@ CONVERTED_COMMUNICATION_TYPE = """
               (
                 SELECT
                   COUNT(*) AS TotalRecords
-                FROM CommunicationType
+                FROM CategoryList
               ) AS TotalRecords
-            FROM CommunicationType
+            FROM CategoryList
             ORDER BY
-              EDI_CommunicationType_Id DESC NULLS LAST;
+              CategoryId DESC NULLS LAST;
 
-            DROP TABLE CommunicationType;
+            DROP TABLE CategoryList;
             """
 
-# The SQL the API actually sent to PostgreSQL for it (42601 near "FROM").
+# The SQL such a pager builds for it (42601 near "FROM").
 REPORTED_WRAP = """
-SELECT EDI_CommunicationType_Id, Code, Description, IsActive,
-CASE WHEN COALESCE(IsActive, FALSE) = TRUE THEN 'YES' ELSE 'NO' END AS IsActiveDesc
-INTO TEMPORARY CommunicationType FROM EDI_CommunicationType
-WHERE COALESCE(IsDeleted, FALSE) = FALSE AND OrgProdId = 3223 ORDER BY 1 DESC NULLS LAST;
-SELECT *, ( SELECT * FROM (SELECT COUNT(*) AS TotalRecords FROM CommunicationType ) AS TotalRecords
-FROM CommunicationType ) FilteredRecords ORDER BY EDI_CommunicationType_Id DESC NULLS LAST
+SELECT CategoryId, Code, Description, IsActive,
+CASE WHEN COALESCE(IsActive, FALSE) = TRUE THEN 'YES' ELSE 'NO' END AS ActiveLabel
+INTO TEMPORARY CategoryList FROM Category
+WHERE COALESCE(IsDeleted, FALSE) = FALSE AND TenantId = 42 ORDER BY 1 DESC NULLS LAST;
+SELECT *, ( SELECT * FROM (SELECT COUNT(*) AS TotalRecords FROM CategoryList ) AS TotalRecords
+FROM CategoryList ) FilteredRecords ORDER BY CategoryId DESC NULLS LAST
 OFFSET @skipRecords ROWS FETCH NEXT @TopRecords ROWS ONLY;
-DROP TABLE CommunicationType;
+DROP TABLE CategoryList;
 """
 
 
@@ -100,11 +100,11 @@ def nested_select_lines(sql: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# the pager port is anchored to what production ran
+# the pager port is anchored to a known failing statement
 # --------------------------------------------------------------------------
 
 def test_infra_wrap_reproduces_the_reported_query():
-    assert flat(totalrecords.infra_wrap(CONVERTED_COMMUNICATION_TYPE, "")) == flat(REPORTED_WRAP)
+    assert flat(totalrecords.infra_wrap(CONVERTED_CATEGORY_LIST, "")) == flat(REPORTED_WRAP)
     assert not validator.validate(REPORTED_WRAP).valid
 
 
@@ -120,7 +120,7 @@ def test_infra_wrap_falls_back_to_the_last_select():
 # --------------------------------------------------------------------------
 
 def test_a059_count_subquery_becomes_window_count():
-    r = convert(COMMUNICATION_TYPE)
+    r = convert(CATEGORY_LIST)
     assert "COUNT(*) OVER() AS TotalRecords" in r.sql
     assert "A059" in codes(r) and "L032" not in codes(r)
     assert pager_ok(r.sql)
@@ -128,7 +128,7 @@ def test_a059_count_subquery_becomes_window_count():
 
 def test_a059_multi_statement_batch_fixture():
     r = convert((FIXTURES / "v217_smoke.sql").read_text(encoding="utf-8"))
-    assert "COUNT(*) OVER() AS TotalRecords\nFROM DataExtract" in r.sql
+    assert "COUNT(*) OVER() AS TotalRecords\nFROM ProductList" in r.sql
     assert "A059" in codes(r)
     assert pager_ok(r.sql)
 
@@ -219,8 +219,8 @@ def test_a060_whitespace_only():
 # PC15 / PC16 -- the same repairs on already-converted code (--check-pg)
 # --------------------------------------------------------------------------
 
-def test_pc15_repairs_the_converted_edi_query():
-    result = pgcheck.check_sql(CONVERTED_COMMUNICATION_TYPE)
+def test_pc15_repairs_the_converted_list_query():
+    result = pgcheck.check_sql(CONVERTED_CATEGORY_LIST)
     assert ("PC15", 1) in result.applied
     assert "COUNT(*) OVER() AS TotalRecords" in result.sql
     assert result.valid_after
@@ -229,7 +229,7 @@ def test_pc15_repairs_the_converted_edi_query():
 
 
 def test_pc15_pc16_leave_repaired_code_alone():
-    fixed = pgcheck.check_sql(CONVERTED_COMMUNICATION_TYPE).sql
+    fixed = pgcheck.check_sql(CONVERTED_CATEGORY_LIST).sql
     assert not pgcheck.check_sql(fixed).applied
 
 

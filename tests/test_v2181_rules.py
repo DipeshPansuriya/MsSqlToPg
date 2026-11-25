@@ -1,6 +1,6 @@
 """v2.18.1: A007 also rewrites a quoted '0'/'1' compared with a boolean column.
 
-T-SQL `ISNULL(sdty.InHouse,'0') = '0'` (Stock GetStockAllotmentListQuery) came out as
+T-SQL `ISNULL(sdty.InHouse,'0') = '0'` (GetItemAllotmentListQuery) came out as
 `COALESCE(sdty.InHouse, FALSE) = '0'`: A020 fixed the COALESCE default, but A007 read only
 0/1 and 'true'/'false' as boolean literals, so the quoted '0' on the other side was left.
 """
@@ -39,8 +39,8 @@ def inhouse_boolean(tmp_path, monkeypatch):
 
 
 def test_isnull_string_default_compared_with_string_zero(inhouse_boolean):
-    r = convert("SELECT s.StockId FROM Stocks s "
-                "INNER JOIN Stock_DocumentType sdty ON sdty.Id = s.Doc_Type "
+    r = convert("SELECT s.ItemId FROM Items s "
+                "INNER JOIN Item_DocumentType sdty ON sdty.Id = s.Doc_Type "
                 "WHERE ISNULL(sdty.InHouse,'0') = '0'")
     out = flat(r.sql)
     assert "COALESCE(sdty.InHouse, FALSE) = FALSE" in out
@@ -49,7 +49,7 @@ def test_isnull_string_default_compared_with_string_zero(inhouse_boolean):
 
 
 def test_string_one_not_equal_and_reversed_operands(inhouse_boolean):
-    r = convert("SELECT a FROM Stock_DocumentType sdty "
+    r = convert("SELECT a FROM Item_DocumentType sdty "
                 "WHERE ISNULL(sdty.InHouse,'1') <> '1' AND '0' = ISNULL(sdty.InHouse, 0)")
     out = flat(r.sql)
     assert "COALESCE(sdty.InHouse, TRUE) <> TRUE" in out
@@ -58,7 +58,7 @@ def test_string_one_not_equal_and_reversed_operands(inhouse_boolean):
 
 def test_bare_column_and_case_condition(inhouse_boolean):
     r = convert("SELECT CASE WHEN sdty.InHouse = '1' THEN 'Y' ELSE 'N' END AS x "
-                "FROM Stock_DocumentType sdty")
+                "FROM Item_DocumentType sdty")
     out = flat(r.sql)
     assert "sdty.InHouse = TRUE" in out
     assert "THEN 'Y' ELSE 'N'" in out       # result values are not comparisons
@@ -79,12 +79,12 @@ def test_non_boolean_columns_keep_their_string_digits():
 
 
 def test_set_clause_string_digit_is_not_booleanised():
-    # the SET guard (DocNoList): a string assigned in SET may be a VARCHAR payload
+    # the SET guard: a string assigned in SET may be a VARCHAR payload
     r = convert("UPDATE t SET IsDeleted = '0' WHERE a = 1")
     assert "IsDeleted = '0'" in flat(r.sql)
 
 
 def test_is_column_declared_as_text_in_the_batch_is_left_alone():
-    r = convert("CREATE TABLE #t (IsRefundExpire VARCHAR(10)); "
-                "SELECT a FROM #t WHERE IsRefundExpire = '1'")
-    assert "IsRefundExpire = '1'" in flat(r.sql)
+    r = convert("CREATE TABLE #t (IsOfferExpire VARCHAR(10)); "
+                "SELECT a FROM #t WHERE IsOfferExpire = '1'")
+    assert "IsOfferExpire = '1'" in flat(r.sql)

@@ -8,7 +8,7 @@ SQL Server converts silently where PostgreSQL refuses, so these PARSE and fail o
     num_col LIKE '%' || @x || '%'                       numeric ~~ text
     COALESCE(int_col, '') / CASE ... THEN 1 ELSE '' END  22P02 invalid input syntax for type integer: ""
     date_col = '' / COALESCE(date_col, '')               22007 invalid input syntax for type date: ""
-    fnGetLocalTime(text_col, @tz), TO_CHAR(text_col, ..) 42883 function ... (text, unknown) does not exist
+    fnToLocalTime(text_col, @tz), TO_CHAR(text_col, ..)  42883 function ... (text, unknown) does not exist
     SELECT bool_col ... UNION SELECT 0                   42804 UNION types boolean and integer cannot be matched
 
 Column types come from column_types.txt (schema_hints.column_types()) AND from the batch itself: a
@@ -23,7 +23,7 @@ runs. Each fix reproduces what SQL Server did:
     * LIKE on a number or date converts it to text, as SQL Server converted it to varchar; on a
       boolean it becomes '1'/'0', the text SQL Server made of a BIT;
     * '' in a number context is 0, in a date context 1900-01-01 (SQL Server's conversion of '');
-    * text passed to fnGetLocalTime / TO_CHAR is cast to TIMESTAMP;
+    * text passed to a local-time function / TO_CHAR is cast to TIMESTAMP;
     * a UNION column mixing a boolean branch with an integer one is INTEGER, as SQL Server's type
       precedence made it (bit + int -> int), so the boolean branch is cast to INTEGER.
 
@@ -41,14 +41,14 @@ import re
 import sqlglot
 from sqlglot import exp
 
-from core import schema_hints
+from core import profile, schema_hints
 
 _NUMERIC = {"integer", "numeric"}
 _DATELIKE = {"date", "timestamp"}
 _PG_TYPE = {"integer": "INTEGER", "numeric": "NUMERIC"}
 _SPLIT_FUNCS = {"string_to_table", "unnest", "regexp_split_to_table", "string_to_array"}
 _SPLIT_ITEM_NAMES = ("value", "items", "item", "splitdata", "v")
-_TIMESTAMP_ARG_FUNCS = {"fngetlocaltime", "to_char", "time_to_str"}
+_TIMESTAMP_ARG_FUNCS = {"to_char", "time_to_str"}     # plus the profile's local_time_functions
 _LITERAL_FAMILY = {"intlit": "integer", "numlit": "numeric", "strlit": "text", "splittext": "text"}
 _TEXT_FUNCS = (exp.DPipe, exp.Concat, exp.Upper, exp.Lower, exp.Trim, exp.Substring, exp.Left, exp.Right,
                exp.TimeToStr)
@@ -325,7 +325,7 @@ class Resolver:
             return _datatype_family(node.this)
         if isinstance(node, exp.Literal):
             if node.is_string:
-                # '@Name' is not text: ACS binds the exact '@Name' literal as a parameter
+                # '@Name' is not text: the application binds the exact '@Name' literal as a parameter
                 return None if _PARAM_LITERAL.match(str(node.this)) else "strlit"
             return "intlit" if str(node.this).lstrip("-").isdigit() else "numlit"
         if isinstance(node, (exp.Add, exp.Sub)) and _is_interval(node.right):
@@ -576,7 +576,7 @@ def _collect_edits(sql: str, trees, R: Resolver, edits: list) -> None:
                     break
                 if (ta in _NUMERIC and isinstance(a, exp.Column) and isinstance(b, exp.Boolean)
                         and isinstance(cmp, (exp.EQ, exp.NEQ))):
-                    # f.IsOceanConfig = TRUE where #OceanFlag made it `CASE ... THEN 1 ELSE 0 END`
+                    # f.IsRemoteConfig = TRUE where #RemoteFlag made it `CASE ... THEN 1 ELSE 0 END`
                     sp = _boolean_span(sql, b, a)
                     if sp:
                         edits.append((sp[0], sp[1], "1" if b.this else "0"))
@@ -680,7 +680,8 @@ def _collect_edits(sql: str, trees, R: Resolver, edits: list) -> None:
                     to_number(left, family)
         for fn in tree.find_all(exp.Func):
             name = _func_name(fn)
-            if name not in _TIMESTAMP_ARG_FUNCS:
+            local_time = profile.is_local_time_function(name)
+            if name not in _TIMESTAMP_ARG_FUNCS and not local_time:
                 continue
             first = fn.this if not isinstance(fn, exp.Anonymous) else (fn.expressions[0] if fn.expressions else None)
             if not (isinstance(first, exp.Column) and R.column(first) == "text"):
@@ -688,8 +689,8 @@ def _collect_edits(sql: str, trees, R: Resolver, edits: list) -> None:
             sp = _span(first)
             if not sp:
                 continue
-            if name == "fngetlocaltime":
-                # fnGetLocalTime(@date DATETIME, ...) converted its text argument; the timestamptz
+            if local_time:
+                # fnToLocalTime(@date DATETIME, ...) converted its text argument; the timestamptz
                 # overload is the one that maps Windows zone ids (A025)
                 edits.append(_wrap(sql, sp, "CAST(", " AS TIMESTAMPTZ)"))
                 continue
@@ -854,8 +855,8 @@ def _union_edits(sql: str, tree, R: Resolver, edits: list) -> None:
 # ==================================================================================================
 # A061 (v2.18.0) -- Dapper parameters cast to the type of what they are compared with.
 #
-# SQL Server converted a parameter to the column's type whatever the C# sent: `Owner_OrgId = '@OrgCode'`
-# with a C# string, `Org_Code = @AgentOrgId` (varchar) with a C# int. Npgsql binds the .NET type -- text,
+# SQL Server converted a parameter to the column's type whatever the C# sent: `OwnerId = '@OwnerCode'`
+# with a C# string, `Customer_Code = @CustomerId` (varchar) with a C# int. Npgsql binds the .NET type -- text,
 # integer -- and PostgreSQL raises 42883 `integer = text` / `character varying = integer`. The converter
 # cannot see the C# type, but a CAST to the column's own type is right for every type Npgsql can send:
 #     number / date / timestamp -> CAST(NULLIF(TRIM(CAST(@x AS TEXT)), '') AS BIGINT | NUMERIC | DATE | TIMESTAMP)
@@ -866,8 +867,8 @@ def _union_edits(sql: str, tree, R: Resolver, edits: list) -> None:
 # A parameter compared with '' becomes CAST(@x AS TEXT) = '' (an int @x made '' raise 22P02); in
 # COALESCE / NULLIF it takes the default's type: COALESCE(@x, '') text, COALESCE(@x, 0) a number.
 # Left alone: parameters against a number literal (@Flag = 1, see L021) or a non-empty text literal
-# ('@BusinessType' = 'Agent'), a boolean, another parameter, an unknown type, and the names
-# QueryParameterProcessor splices in as text (@UserId, @...dbName).
+# ('@CustomerType' = 'Retail'), a boolean, another parameter, an unknown type, and the names
+# the profile lists as spliced in as text (literal_safe_parameters).
 # Known limit: varchar = int compared numerically in SQL Server ('007' = 7); the cast compares text.
 # ==================================================================================================
 
@@ -876,15 +877,15 @@ _CMP_OP = r"(?:=|<>|!=|>=|<=|<|>)"
 
 
 def _param_name(node) -> str | None:
-    """'x' for a Dapper parameter @x or the exact '@x' literal ACS binds, else None."""
-    from core import pgfixes
+    """'x' for a Dapper parameter @x or the exact '@x' literal the application binds, else None."""
+    from core import profile
     if isinstance(node, exp.Parameter):
         name = str(getattr(node.this, "name", "") or "")
     elif isinstance(node, exp.Literal) and node.is_string and _PARAM_LITERAL.match(str(node.this)):
         name = str(node.this)[1:]
     else:
         return None
-    if not name or name.lower() in pgfixes._STATIC_TEXT_PARAMS:
+    if not name or name.lower() in profile.current().literal_safe_parameters:
         return None
     return name
 
@@ -988,7 +989,7 @@ def cast_params(sql: str) -> tuple[str, int]:
             for call in tree.find_all(exp.Coalesce, exp.Nullif):
                 # COALESCE(@x, '') / NULLIF(@x, ''): the text default makes PostgreSQL read '' as @x's
                 # type, so an int @x raises 22P02 -- the text is what the T-SQL compared.
-                # COALESCE(@x, 0): a C# string, or a null int? (the infra binds null as TEXT), raises
+                # COALESCE(@x, 0): a C# string, or a null int? (some data layers bind null as TEXT), raises
                 # 42804 text vs integer -- SQL Server compared the number.
                 if isinstance(call.parent, exp.Func) and _func_name(call.parent) in _SPLIT_FUNCS:
                     continue   # A022's STRING_TO_TABLE(NULLIF(@csv, ''), ','): a CSV list is always text

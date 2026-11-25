@@ -50,8 +50,8 @@ honest — if a fix has no case it declines, it is guessing:
   named `^Is[A-Z]`; `COALESCE(Quantity, 0) = 0` is untouched
 - A009 qualifier: only SQL Server's default `dbo` is dropped; a real schema
   (`reporting.Sales`) is preserved, and a runtime placeholder catalog
-  (`@MasterdbName`) is never stripped — that is A010's job
-- A010 placeholder: `[@MasterdbName].[dbo].[T]` → `"@MasterdbName".T` — the
+  (`@AppDbName`) is never stripped — that is A010's job
+- A010 placeholder: `[@AppDbName].[dbo].[T]` → `"@AppDbName".T` — the
   app string-replaces the placeholder at runtime, so it must survive; the
   substituted value becomes a PostgreSQL SCHEMA name. Refusal: placeholder +
   real schema (`[@X].[reporting].[T]`) has no two-level mapping — left alone

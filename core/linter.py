@@ -355,7 +355,7 @@ def l016_insert_returning_split(original: str, converted: str,
                                 masked: str) -> list[Warning]:
     """RETURNING separated from its INSERT by ';'. The clause must belong to
     the same statement -- split off, PostgreSQL raises 42601 at RETURNING.
-    Common ACS shape: the C# caller appends ` RETURNING Logid;` to a base
+    Common shape: the C# caller appends ` RETURNING Id;` to a base
     query that already ends with ';'.
 
     Checked against the ORIGINAL as well as the output: SQLGlot silently
@@ -491,7 +491,7 @@ def l010_unparsed_ast(expressions: list) -> list[Warning]:
 # L015 -- AST-based: a database (catalog) qualifier survived auto-fix
 # --------------------------------------------------------------------------
 # Only the A010 refusal case reaches here: a runtime placeholder combined with
-# a real (non-dbo) schema, e.g. [@MasterdbName].[reporting].[Sales]. A009
+# a real (non-dbo) schema, e.g. [@AppDbName].[reporting].[Sales]. A009
 # strips literal catalogs and A010 converts placeholder ones, so anything left
 # is a three-part reference with no automatic two-level mapping. PostgreSQL's
 # grammar ACCEPTS three-part names and only rejects them at RUNTIME

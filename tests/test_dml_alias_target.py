@@ -73,15 +73,15 @@ def test_l018_message_names_the_alias():
 
 
 # --------------------------------------------------------------------------
-# A007 SET-clause guard (found while converting DocNoList)
+# A007 SET-clause guard (found while converting a document list query)
 # --------------------------------------------------------------------------
 
 def test_string_flag_assignment_is_not_booleanised():
-    """`SET IsRefundExpire = 'false'` writes to a VARCHAR('true'/'false')
+    """`SET IsOfferExpire = 'false'` writes to a VARCHAR('true'/'false')
     column -- sqlglot parses SET items as EQ nodes, and rewriting the string
     to a boolean breaks the UPDATE at runtime."""
     result = orchestrator.convert(
-        "UPDATE #t SET IsRefundExpire = 'false' WHERE a = 1")
+        "UPDATE #t SET IsOfferExpire = 'false' WHERE a = 1")
     assert "= 'false'" in result.sql
 
 
@@ -106,7 +106,7 @@ def test_cast_of_boolean_coalesce_becomes_case_producing_1_0():
     42804 AND would render 'true'/'false' where T-SQL rendered '1'/'0'."""
     result = orchestrator.convert(
         "SELECT CAST(COALESCE(SLV.IsActive, 0) AS VARCHAR(10)) AS IsActive "
-        "FROM System_ListOfValue SLV")
+        "FROM System_Lookup SLV")
     sql = " ".join(result.sql.split())
     assert "CASE WHEN COALESCE(SLV.IsActive, FALSE) THEN '1' ELSE '0' END" in sql
     assert "A020" in codes(result)
@@ -181,7 +181,7 @@ def test_a021_is_idempotent():
 
 
 # --------------------------------------------------------------------------
-# A022 -- ACS dbo.Split table function
+# A022 -- user-defined dbo.Split table function
 # --------------------------------------------------------------------------
 
 def test_dbo_split_becomes_string_to_table_with_items_alias():

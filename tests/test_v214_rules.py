@@ -2,7 +2,7 @@
 already-converted SQL (PC09), and parameters buried inside string literals
 (A052/PC11/L030).
 
-All three were found on 2026-10-07 converting the Master API: every case below
+All three were found on 2026-10-07 converting a real API: every case below
 parsed as VALID PostgreSQL and then failed at runtime (or silently returned
 the wrong rows), so the validator alone never caught them.
 """
@@ -36,14 +36,14 @@ def errors(result):
 # ==========================================================================
 
 def test_bracketed_table_and_columns_come_out_unquoted():
-    """`[ER].[ITCHSCode]` used to become `"ER"."ITCHSCode"`: the alias ER is
+    """`[ER].[ItemClassCode]` used to become `"ER"."ItemClassCode"`: the alias ER is
     declared unquoted (folds to er), so "ER" is a missing FROM entry, and the
-    column is itchscode -- valid grammar, runtime failure."""
-    r = convert("SELECT [ER].[ITCHSCode] FROM [dbo].[Master_HSCC] ER "
+    column is itemclasscode -- valid grammar, runtime failure."""
+    r = convert("SELECT [ER].[ItemClassCode] FROM [dbo].[Ref_Class] ER "
                 "WHERE ISNULL([ER].[IsDeleted],0)=0")
     out = flat(r.sql)
-    assert "ER.ITCHSCode" in out
-    assert "FROM Master_HSCC AS ER" in out
+    assert "ER.ItemClassCode" in out
+    assert "FROM Ref_Class AS ER" in out
     assert '"' not in out
     assert "A051" in codes(r)
     assert r.validation and r.validation.valid
@@ -51,36 +51,36 @@ def test_bracketed_table_and_columns_come_out_unquoted():
 
 def test_placeholder_prefix_keeps_a010_and_table_is_unquoted(monkeypatch):
     monkeypatch.setenv("MSSQLTOPG_DB_PLACEHOLDER", "schema")   # pre-2.16 mode
-    r = convert("SELECT a FROM [@MasterdbName].[dbo].[Master_Tax] T")
+    r = convert("SELECT a FROM [@AppDbName].[dbo].[Ref_Tax] T")
     out = flat(r.sql)
-    assert '"@MasterdbName".Master_Tax' in out
-    assert '"Master_Tax"' not in out
+    assert '"@AppDbName".Ref_Tax' in out
+    assert '"Ref_Tax"' not in out
 
 
 def test_reserved_words_become_lowercase_quoted():
     """The schema generator created reserved-word columns as "order"."""
-    out = flat(convert("SELECT m0.[Order], m0.[Group], [User] FROM Master_Seq m0").sql)
+    out = flat(convert("SELECT m0.[Order], m0.[Group], [User] FROM Ref_Seq m0").sql)
     assert 'm0."order"' in out and 'm0."group"' in out and '"user"' in out
 
 
 def test_names_that_need_quoting_keep_their_text():
-    out = flat(convert("SELECT MZ.ZoneName AS [Zone Name] FROM Master_Zone MZ").sql)
+    out = flat(convert("SELECT MZ.AreaName AS [Zone Name] FROM Ref_Area MZ").sql)
     assert 'AS "Zone Name"' in out
 
 
 def test_bracketed_alias_with_spaces_still_parses():
     """sqlglot's T-SQL reader refuses `AS "Is Full Day"`, so names that must
     stay quoted are left in brackets for it (it emits the quoted form)."""
-    r = convert("SELECT e.HDL_IsActive_BT AS [Is Active], e.HDL_IsFullDay_BT AS [Is Full Day] "
-                "FROM MST_HolidayList_Master e")
+    r = convert("SELECT e.LOC_IsActive_BT AS [Is Active], e.LOC_IsFullDay_BT AS [Is Full Day] "
+                "FROM CAL_HolidayList e")
     assert r.validation and r.validation.valid, errors(r)
     assert 'AS "Is Full Day"' in flat(r.sql)
 
 
 def test_glued_bracket_alias_gets_its_space():
-    out = flat(convert("SELECT MTP.TerminalZone[TerminalZoneId], COUNT(*)[Total] "
-                       "FROM Master_Terminal_Printing MTP GROUP BY MTP.TerminalZone").sql)
-    assert "MTP.TerminalZone AS TerminalZoneId" in out
+    out = flat(convert("SELECT MTP.SiteArea[SiteAreaId], COUNT(*)[Total] "
+                       "FROM Ref_Site_Printing MTP GROUP BY MTP.SiteArea").sql)
+    assert "MTP.SiteArea AS SiteAreaId" in out
     assert "AS Total" in out
 
 
@@ -117,7 +117,7 @@ def test_no_brackets_no_a051():
 # ==========================================================================
 
 def test_terminator_goes_before_a_comment_at_the_end_of_a_code_line():
-    """Searchconsurtium regression: `... LIKE '%' + '@x' + '%' --GROUP BY y`
+    """Searchalliance regression: `... LIKE '%' + '@x' + '%' --GROUP BY y`
     got its `;` appended AFTER the comment, where it vanished; the next SELECT
     ran into this one and the whole batch was refused (SG-PARSE)."""
     from core import autofix
@@ -156,21 +156,21 @@ def test_batch_with_trailing_comment_converts():
 # ==========================================================================
 
 def test_for_xml_stuff_with_len_length_argument_is_rewritten():
-    """Getmasterproducttypesearch: STUFF((...FOR XML PATH('')),1,LEN(','),'')
+    """Getproducttypesearch: STUFF((...FOR XML PATH('')),1,LEN(','),'')
     was refused (the comma inside LEN(',') broke the argument match), so
     sqlglot dropped FOR XML and left STUFF over a multi-row subquery."""
-    r = convert("SELECT ISNULL((select STUFF((select ', ' + MS.SHCCode from Master_SHC MS "
-                "WHERE MS.Id = P.Id ORDER BY MS.Priority DESC for xml path('')),1,LEN(','),'')),'All') AS SHCCode "
-                "FROM Master_ProductType P")
+    r = convert("SELECT ISNULL((select STUFF((select ', ' + MS.TagCode from Ref_Tag MS "
+                "WHERE MS.Id = P.Id ORDER BY MS.Priority DESC for xml path('')),1,LEN(','),'')),'All') AS TagCode "
+                "FROM Ref_ItemType P")
     out = flat(r.sql)
-    assert "STRING_AGG(MS.SHCCode, ', ' ORDER BY MS.Priority DESC" in out
+    assert "STRING_AGG(MS.TagCode, ', ' ORDER BY MS.Priority DESC" in out
     assert "STUFF" not in out.upper()
     assert r.validation and r.validation.valid
 
 
 def test_for_xml_subquery_ending_in_a_comment_keeps_its_close():
     """The rewrite appends ')' after the subquery; a trailing `--` comment
-    swallowed it (HandlingLocation: ... = 0 -- AND HL.HLCodeId = MH.HLCodeId)."""
+    swallowed it (WorkLocation: ... = 0 -- AND HL.ClassCodeId = MH.ClassCodeId)."""
     r = convert("SELECT ISNULL((select STUFF((select ', ' + OP.Loc from OP\n"
                 "WHERE ISNULL(OP.IsDeleted,0)=0 -- AND OP.Code = M.Code\n"
                 "for xml path('')),1,LEN(','),'')),'ALL') as [Loc] FROM M")
@@ -183,7 +183,7 @@ def test_for_xml_subquery_ending_in_a_comment_keeps_its_close():
 # ==========================================================================
 
 def test_like_wildcard_param_literal_is_bound():
-    """QueryParameterProcessor only rewrites an EXACT '@Name' to a bound
+    """A parameter pre-processor only rewrites an EXACT '@Name' to a bound
     parameter; '%@searchText%' stays a literal and matches the text
     '@searchText' -- the search silently returns nothing."""
     r = convert("SELECT Code FROM T WHERE Code LIKE '%@searchText%'")
@@ -192,8 +192,8 @@ def test_like_wildcard_param_literal_is_bound():
 
 
 def test_exact_quoted_param_is_left_alone():
-    r = convert("SELECT a FROM T WHERE OrgProdId = '@OrgProdId'")
-    assert "'@OrgProdId'" in r.sql
+    r = convert("SELECT a FROM T WHERE TenantProductId = '@TenantProductId'")
+    assert "'@TenantProductId'" in r.sql
     assert "A052" not in codes(r) and "L030" not in codes(r)
 
 
@@ -213,11 +213,11 @@ def test_other_unbound_param_text_is_reported():
 # PC09 -- missing ';' between statements in ALREADY-CONVERTED PostgreSQL
 # ==========================================================================
 
-MULTI = ("SELECT * FROM Master_Tax WHERE TaxId = @TaxId AND COALESCE(IsDeleted, FALSE) = FALSE\n"
+MULTI = ("SELECT * FROM Ref_Tax WHERE TaxId = @TaxId AND COALESCE(IsDeleted, FALSE) = FALSE\n"
          "\n"
-         "\tSELECT * FROM Master_TaxDetails WHERE MasterNo = @TaxId\n"
+         "\tSELECT * FROM Ref_TaxDetails WHERE ParentNo = @TaxId\n"
          "\n"
-         "\tselect master.* from Master_Tax tax inner join Master_Country master on master.CountryId = tax.CountryCode\n")
+         "\tselect master.* from Ref_Tax tax inner join Ref_Country master on master.CountryId = tax.CountryCode\n")
 
 
 def test_check_sql_inserts_missing_statement_separators():
@@ -271,12 +271,12 @@ def test_statement_keyword_inside_string_is_not_a_boundary():
 # ==========================================================================
 
 def test_check_sql_unbrackets_tsql_identifiers():
-    sql = ("SELECT MTP.TerminalZone[TerminalZoneId], [ER].[ITCHSCode], m0.[Order]\n"
-           "FROM Master_HSCC ER LIMIT 1")
+    sql = ("SELECT MTP.SiteArea[SiteAreaId], [ER].[ItemClassCode], m0.[Order]\n"
+           "FROM Ref_Class ER LIMIT 1")
     result = pgcheck.check_sql(sql)
     assert "PC10" in dict(result.applied)
-    assert "MTP.TerminalZone TerminalZoneId" in result.sql
-    assert "ER.ITCHSCode" in result.sql and 'm0."order"' in result.sql
+    assert "MTP.SiteArea SiteAreaId" in result.sql
+    assert "ER.ItemClassCode" in result.sql and 'm0."order"' in result.sql
     assert result.valid_after is True
 
 
@@ -303,7 +303,7 @@ def test_check_sql_binds_wildcard_param_literal():
 
 
 def test_check_sql_leaves_exact_param_literal():
-    sql = "SELECT a FROM t WHERE b = '@OrgProdId' LIMIT 1"
+    sql = "SELECT a FROM t WHERE b = '@TenantProductId' LIMIT 1"
     result = pgcheck.check_sql(sql)
     assert result.sql == sql
 
@@ -313,7 +313,7 @@ def test_check_sql_leaves_exact_param_literal():
 # ==========================================================================
 
 def test_check_sql_replaces_split_with_string_to_table():
-    """18 Master constants call SPLIT(): no such function in the PostgreSQL
+    """18 reference constants call SPLIT(): no such function in the PostgreSQL
     schema, so each fails with 42883 at runtime -- grammar-valid all along."""
     sql = ("SELECT a FROM t WHERE id IN (\n  SELECT CAST(items AS INT)\n  FROM SPLIT(@Ids, ',')\n) LIMIT 1")
     result = pgcheck.check_sql(sql)
@@ -378,16 +378,16 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
 
 def test_check_run_repairs_bracket_only_literal_and_separators(tmp_path):
     body = ('public class Q {\r\n'
-            '    public static readonly string A = @"SELECT MTP.TerminalPrintingId, MTP.TerminalZone[TerminalZoneId]\r\n'
-            '        FROM Master_Terminal_Printing MTP WHERE COALESCE(MTP.IsDeleted, FALSE) = FALSE\r\n'
+            '    public static readonly string A = @"SELECT MTP.SitePrintingId, MTP.SiteArea[SiteAreaId]\r\n'
+            '        FROM Ref_Site_Printing MTP WHERE COALESCE(MTP.IsDeleted, FALSE) = FALSE\r\n'
             '\r\n'
-            '        SELECT MTG.TerminalGridId FROM Master_Terminal_PrintingGrid MTG";\r\n'
+            '        SELECT MTG.SiteGridId FROM Ref_Site_PrintingGrid MTG";\r\n'
             '}\r\n')
     path = _write(tmp_path, "Q.cs", body)
     real = pgcheck.run(tmp_path, dry_run=False)
     assert real.total("fixed") == 1
     new = path.read_bytes().decode("utf-8")
-    assert "MTP.TerminalZone TerminalZoneId" in new
+    assert "MTP.SiteArea SiteAreaId" in new
     assert "= FALSE;\r\n" in new
     assert "\r\r\n" not in new
     sql = new.split('@"', 1)[1].split('";', 1)[0]

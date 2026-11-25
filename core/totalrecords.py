@@ -1,12 +1,11 @@
 """A059 / A060 / L032 (v2.17.0) and their converted-code twins PC15 / PC16 --
-statements that return a TotalRecords / TotalCount column, kept in a shape ACS's
+statements that return a TotalRecords / TotalCount column, kept in a shape a
 filterString pager can wrap.
 
-When a Dapper call carries a `filterString` parameter, QueryParameterProcessor
-.GetFilteredRecordsAsync (KLSPL infra, feature/ACSPostGresChanges c787fe4) edits
-the SQL text before it runs:
+Some data-access layers page a grid query when the Dapper call carries a
+`filterString` parameter, editing the SQL text before it runs:
 
-  1. PostgreSQLUtility.SplitStatements cuts the batch at EVERY line whose first
+  1. a statement splitter cuts the batch at EVERY line whose first
      word is SELECT/INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/IF/SET/DECLARE --
      subquery lines included; it is not statement-aware;
   2. every piece that starts with SELECT and mentions TotalRecords/TotalCount
@@ -19,9 +18,7 @@ sqlglot's pretty printer puts a subquery's SELECT on its own line. So
 `SELECT *, (SELECT COUNT(*) AS TotalRecords FROM t) AS TotalRecords FROM t`,
 harmless on one line in the T-SQL, became a piece that starts INSIDE the
 parentheses; the pager wrapped that piece and PostgreSQL raised 42601 `syntax
-error at or near "FROM"`. Three EDINotification list screens returned 500 that
-way (2026-10-21). The runtime T-SQL converter A016 guards against is retired in
-that infra build, which leaves the pager as the splitter's only consumer.
+error at or near "FROM"` (2026-10-21).
 """
 
 from __future__ import annotations
@@ -173,7 +170,7 @@ def glue_nested_selects(sql: str) -> tuple[str, int]:
 
 
 # --------------------------------------------------------------------------
-# the pager itself -- a port of the infra code, used by L032
+# the pager itself -- a port of its logic, used by L032
 # --------------------------------------------------------------------------
 
 _SPLIT_RE = re.compile(r"(?=^\s*(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|IF|SET|DECLARE)\b)",
@@ -184,7 +181,7 @@ _TRAILING_WORD_RE = re.compile(r"\b(?:END|ELSE|BEGIN)$", re.IGNORECASE)
 
 
 def _split_statements(script: str) -> list[str]:
-    """PostgreSQLUtility.SplitStatements: Regex.Split keeps the captured
+    """The statement splitter: Regex.Split keeps the captured
     keyword, so the parts alternate keyword / piece."""
     parts = _SPLIT_RE.split(script)
     statements, i = [], 0
@@ -226,7 +223,7 @@ def _split_order_by(query: str) -> tuple[str, str]:
 
 
 def infra_wrap(sql: str, filter_sql: str) -> str:
-    """The SQL QueryParameterProcessor.GetFilteredRecordsAsync runs for a
+    """The SQL a filterString pager runs for a
     query called with filterString (PostgreSQL provider, no parsed ORDER BY)."""
     statements = _split_statements(sql)
     candidates = [s for s in statements
@@ -270,9 +267,9 @@ def lint(sql: str) -> list[Warning]:
     return [Warning(
         "L032", Severity.WARNING,
         "A statement returning TotalRecords/TotalCount breaks when the C# call passes "
-        "filterString: ACS's pager (QueryParameterProcessor.GetFilteredRecordsAsync) wraps "
-        "the piece that starts at a line-leading SELECT and mentions TotalRecords, and the "
-        "wrapped SQL is not valid PostgreSQL (42601 at run time). Usual causes: a nested "
+        "filterString: a pager that wraps "
+        "the piece starting at a line-leading SELECT that mentions TotalRecords produces "
+        "SQL that is not valid PostgreSQL (42601 at run time). Usual causes: a nested "
         "SELECT on its own line after a comment, the statement's own WHERE (the pager adds "
         "a second one), LIMIT before OFFSET. Keep `SELECT ..., COUNT(*) OVER() AS "
         "TotalRecords FROM t ORDER BY x` on its own lines and put filters in a CTE before it.")]

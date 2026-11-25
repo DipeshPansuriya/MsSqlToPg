@@ -111,21 +111,21 @@ def test_cast_inside_case_branch_is_not_guarded():
 
 # ---------------------------------------------------------------- R006
 def test_temp_table_without_drop_guard():
-    assert "R006" in codes("CREATE TEMP TABLE AwbGuids (a int)")
+    assert "R006" in codes("CREATE TEMP TABLE OrderGuids (a int)")
 
 
 def test_temp_table_with_drop_guard_is_clean():
-    sql = ("DROP TABLE IF EXISTS pg_temp.AwbGuids;\n"
-           "CREATE TEMP TABLE AwbGuids (a int)")
+    sql = ("DROP TABLE IF EXISTS pg_temp.OrderGuids;\n"
+           "CREATE TEMP TABLE OrderGuids (a int)")
     assert "R006" not in codes(sql)
 
 
 # ---------------------------------------------------------------- fragments
 def test_fragment_names_are_recognised():
-    assert resolvability.is_probable_fragment("GetShipmentList_Preamble")
-    assert resolvability.is_probable_fragment("GetExportGetAllV3_Template")
+    assert resolvability.is_probable_fragment("GetOrderList_Preamble")
+    assert resolvability.is_probable_fragment("GetOutboundGetAllV3_Template")
     assert resolvability.is_probable_fragment("ColMap_TotalGrossWgtUnit")
-    assert not resolvability.is_probable_fragment("GetAllBookSlotImport")
+    assert not resolvability.is_probable_fragment("GetAllBookingInbound")
 
 
 # ---------------------------------------------------------------- misc

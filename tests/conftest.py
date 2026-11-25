@@ -5,12 +5,14 @@ schema and change whenever it does. The suite pins the hand-confirmed baseline
 list and NO column types, so results never depend on what ships next to app.py;
 tests of A024/A054 point the env vars at their own files. The placeholder policy
 is the v2.16.0 default ("drop") unless a test sets MSSQLTOPG_DB_PLACEHOLDER.
+A fixed test project profile is pinned too, so a developer's own
+project_profile.json can never change a result.
 """
 from pathlib import Path
 
 import pytest
 
-from core import schema_hints
+from core import profile, schema_hints
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -20,6 +22,7 @@ def _pinned_schema_hints(monkeypatch):
     monkeypatch.setenv(schema_hints.ENV_VAR, str(FIXTURES / "boolean_columns_baseline.txt"))
     monkeypatch.setenv(schema_hints.TYPES_ENV_VAR, str(FIXTURES / "column_types_empty.txt"))
     monkeypatch.delenv(schema_hints.PLACEHOLDER_ENV_VAR, raising=False)
+    monkeypatch.setenv(profile.ENV_VAR, str(FIXTURES / "project_profile_test.json"))
     schema_hints.reset()
     yield
     schema_hints.reset()
